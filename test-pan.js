@@ -2,7 +2,7 @@ const https = require('https');
 
 const API_URL = 'https://apitxt.com/api/panVerify';
 const AUTH_KEY = 'RtA9FdfvRkK7E4sRn8DfejJ4OVfvaGcQ1tSBhRxzTEY';
-const TEST_PAN = 'KCRPK9812F';
+const TEST_PAN = 'KSJPS2535H';
 const TEST_NAME = 'mohammad shoaib khan';
 const TEST_DOB = '15/05/2002';
 
