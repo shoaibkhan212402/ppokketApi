@@ -29,7 +29,8 @@ const initCibilTable = async () => {
     `);
     console.log('✅ cibil_reports table initialized');
   } catch (err) {
-    console.error('❌ Failed to initialize cibil_reports table:', err.message);
+    console.error('❌ Failed to initialize cibil_reports table details:', err);
+    console.error('❌ Failed to initialize cibil_reports table:', err.message || err);
   }
 };
 initCibilTable();

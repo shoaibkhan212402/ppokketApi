@@ -14,14 +14,22 @@ const pool = mysql.createPool({
 });
 
 const connectDB = async () => {
+  const host = process.env.DB_HOST || 'localhost';
+  const port = process.env.DB_PORT || 3306;
+  const user = process.env.DB_USER || 'root';
+  const database = process.env.DB_NAME || 'ppokket_db';
+  console.log(`⚙️ Attempting MySQL connection to ${user}@${host}:${port}/${database}...`);
+  
   try {
     const conn = await pool.getConnection();
-    console.log(`✅ MySQL Connected: ${process.env.DB_HOST}`);
+    console.log(`✅ MySQL Connected successfully to ${host}:${port}`);
     conn.release();
   } catch (err) {
-    console.error('❌ MySQL Connection Error:', err.message);
+    console.error('❌ MySQL Connection Error details:', err);
+    console.error('❌ MySQL Connection Error message:', err.message || err);
     process.exit(1);
   }
 };
 
 module.exports = { pool, connectDB };
+
