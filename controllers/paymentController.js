@@ -42,7 +42,7 @@ const createOrder = async (req, res) => {
         throw new Error('Placeholder keys: using simulated Razorpay order');
       }
     } catch (e) {
-      console.log('🧪 Razorpay simulation active:', e.message);
+
       order = {
         id: `order_mock_${crypto.randomBytes(8).toString('hex')}`,
         amount: Math.round(amountVal * 100),
@@ -196,13 +196,13 @@ const handleWebhook = async (req, res) => {
       );
       
       if (!txn.length) {
-        console.warn('⚠️ Webhook: Transaction not found for order_id:', razorpay_order_id);
+
         return;
       }
       
       // If already processed, skip
       if (txn[0].status === 'success') {
-        console.log('ℹ️ Webhook: Transaction already processed successfully:', razorpay_order_id);
+
         return;
       }
       
@@ -244,7 +244,7 @@ const handleWebhook = async (req, res) => {
         [userId, 'Payment Successful (Webhook) ✅', `Your EMI payment of ₹${amount} has been received. Payment ID: ${razorpay_payment_id}`, 'payment']
       );
       
-      console.log(`✅ Webhook: Loan #${loan_id} repayment of ₹${amount} completed successfully.`);
+
     }
   } catch (err) {
     console.error('❌ Webhook error:', err.message);
@@ -255,3 +255,4 @@ const handleWebhook = async (req, res) => {
 };
 
 module.exports = { createOrder, verifyPayment, getPaymentHistory, handleWebhook };
+

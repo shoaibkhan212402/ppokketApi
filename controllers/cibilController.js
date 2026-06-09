@@ -27,7 +27,7 @@ const initCibilTable = async () => {
         INDEX (userId)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
-    console.log('✅ cibil_reports table initialized');
+
   } catch (err) {
     console.error('❌ Failed to initialize cibil_reports table details:', err);
     console.error('❌ Failed to initialize cibil_reports table:', err.message || err);
@@ -385,3 +385,4 @@ module.exports = {
   adminGetReportDetail,
   adminDeleteReport
 };
+

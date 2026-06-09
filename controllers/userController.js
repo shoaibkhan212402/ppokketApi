@@ -9,15 +9,25 @@ const getProfile = async (req, res) => {
     if (cached) return res.json(cached);
 
     const [rows] = await pool.query(
-      `SELECT u.*, bd.account_holder, bd.account_number, bd.ifsc_code, bd.bank_name, bd.account_type, bd.is_verified as bank_verified
+      `SELECT u.*, bd.account_holder, bd.account_number, bd.ifsc_code, bd.bank_name, bd.account_type, bd.is_verified as bank_verified,
+              k.status as kyc_doc_status
        FROM users u
        LEFT JOIN bank_details bd ON bd.user_id = u.id
+       LEFT JOIN kyc_documents k ON k.user_id = u.id
        WHERE u.id = ?`,
       [req.user.id]
     );
     if (!rows.length) return res.status(404).json({ success: false, message: 'User not found' });
     const user = rows[0];
     delete user.password;
+    if (user.is_kyc_verified) {
+      user.kyc_status = 'approved';
+    } else if (user.kyc_doc_status) {
+      user.kyc_status = user.kyc_doc_status;
+    } else {
+      user.kyc_status = 'not_submitted';
+    }
+    delete user.kyc_doc_status;
     const response = { success: true, user };
     await setCache(cacheKey, response, CACHE_TTL.SHORT);
     res.json(response);
@@ -78,6 +88,60 @@ const updateBankDetails = async (req, res) => {
   }
 };
 
+// POST /api/user/bank-verify
+const verifyBankDetails = async (req, res) => {
+  try {
+    const { account_holder, account_number, ifsc_code, bank_name, account_type } = req.body;
+    
+    if (!account_holder || !account_number || !ifsc_code || !bank_name) {
+      return res.status(400).json({ success: false, message: 'All fields are required for bank verification.' });
+    }
+
+    // Dummy Validation Checks
+    if (!/^\d{9,18}$/.test(account_number)) {
+      return res.status(400).json({ success: false, message: 'Invalid bank account number. Must be between 9 and 18 digits.' });
+    }
+
+    const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+    if (!ifscRegex.test(ifsc_code.trim().toUpperCase())) {
+      return res.status(400).json({ success: false, message: 'Invalid IFSC code format. E.g. HDFC0001234' });
+    }
+
+    // Save/Update with is_verified = 1
+    await pool.query(
+      `INSERT INTO bank_details (user_id, account_holder, account_number, ifsc_code, bank_name, account_type, is_verified)
+       VALUES (?, ?, ?, ?, ?, ?, 1)
+       ON DUPLICATE KEY UPDATE
+         account_holder = VALUES(account_holder),
+         account_number = VALUES(account_number),
+         ifsc_code = VALUES(ifsc_code),
+         bank_name = VALUES(bank_name),
+         account_type = VALUES(account_type),
+         is_verified = 1,
+         updated_at = NOW()`,
+      [
+        req.user.id,
+        account_holder.trim(),
+        account_number.trim(),
+        ifsc_code.trim().toUpperCase(),
+        bank_name.trim(),
+        account_type || 'savings'
+      ]
+    );
+
+    // Invalidate user caches
+    await invalidateUserCache(req.user.id);
+
+    return res.json({
+      success: true,
+      verified: true,
+      message: 'Bank account verified successfully via dummy gateway.'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 // GET /api/user/dashboard
 const getDashboard = async (req, res) => {
   try {
@@ -87,8 +151,14 @@ const getDashboard = async (req, res) => {
     if (cached) return res.json(cached);
 
     const [userRows] = await pool.query(
-      'SELECT credit_limit, wallet_balance, credit_score FROM users WHERE id = ?', [userId]
+      'SELECT credit_limit, wallet_balance, credit_score, is_kyc_verified FROM users WHERE id = ?', [userId]
     );
+    const [kycRows] = await pool.query(
+      'SELECT status FROM kyc_documents WHERE user_id = ?', [userId]
+    );
+    const kyc_status = userRows[0]?.is_kyc_verified
+      ? 'approved'
+      : (kycRows[0]?.status || 'not_submitted');
     const [activeLoan] = await pool.query(
       'SELECT * FROM loans WHERE user_id = ? AND status IN ("disbursed","approved") ORDER BY created_at DESC LIMIT 1', [userId]
     );
@@ -105,6 +175,7 @@ const getDashboard = async (req, res) => {
       success: true,
       dashboard: {
         ...userRows[0],
+        kyc_status,
         active_loan: activeLoan[0] || null,
         next_emi: nextEmi[0] || null,
         recent_transactions: recentTxn,
@@ -209,5 +280,5 @@ const checkEligibility = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, updateBankDetails, getDashboard, checkEligibility };
+module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, checkEligibility };
 

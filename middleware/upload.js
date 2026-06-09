@@ -1,11 +1,17 @@
+require('dotenv').config();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
 let storage;
+const hasCloudinaryConfig =
+  process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET &&
+  process.env.CLOUDINARY_CLOUD_NAME !== 'your_cloud_name' &&
+  process.env.CLOUDINARY_API_KEY !== 'your_api_key' &&
+  process.env.CLOUDINARY_API_SECRET !== 'your_api_secret';
 
 // Check if Cloudinary is configured
-if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_CLOUD_NAME !== 'your_cloud_name') {
+if (hasCloudinaryConfig) {
   try {
     const { CloudinaryStorage } = require('multer-storage-cloudinary');
     const cloudinary = require('../config/cloudinary');
@@ -21,10 +27,12 @@ if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_CLOUD_NAME !== '
         };
       },
     });
-    console.log('✅ Multer configured with Cloudinary storage');
+
   } catch (err) {
-    console.error('⚠️ CloudinaryStorage initialization failed, falling back to disk storage:', err.message);
+    console.error('⚠️ CloudinaryStorage initialization failed, falling back to disk storage:', err.stack || err.message);
   }
+} else {
+
 }
 
 if (!storage) {
@@ -43,13 +51,14 @@ if (!storage) {
       cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
     }
   });
-  console.log('✅ Multer configured with Local Disk storage at backend/uploads');
+
 }
 
 const fileFilter = (req, file, cb) => {
   const allowed = [
     'image/jpeg', 'image/png', 'image/jpg', 'application/pdf',
-    'image/heic', 'image/heif', 'image/webp'
+    'image/heic', 'image/heif', 'image/webp',
+    'application/octet-stream', // React Native often sends this for camera/gallery picks
   ];
   if (allowed.includes(file.mimetype) || file.mimetype.startsWith('image/')) {
     cb(null, true);
@@ -65,3 +74,4 @@ const upload = multer({
 });
 
 module.exports = upload;
+

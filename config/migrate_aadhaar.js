@@ -8,10 +8,10 @@ async function run() {
   steps.push(async () => {
     try {
       await pool.query(`ALTER TABLE users ADD COLUMN aadhaar_ref_id VARCHAR(100) DEFAULT NULL`);
-      console.log('✅ Column aadhaar_ref_id added to users table.');
+
     } catch (err) {
       if (err.code === 'ER_DUP_COLUMN_NAME') {
-        console.log('ℹ️  Column aadhaar_ref_id already exists in users table.');
+
       } else {
         throw err;
       }
@@ -38,16 +38,15 @@ async function run() {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
-    console.log('✅ Table aadhaar_kyc created (or already exists).');
   });
 
   // ── Run all steps ──────────────────────────────────────────────────────────
   try {
-    console.log('🔄 Running Aadhaar KYC migration...\n');
+
     for (const step of steps) {
       await step();
     }
-    console.log('\n✅ Aadhaar KYC migration completed successfully.');
+
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
   } finally {
@@ -56,3 +55,4 @@ async function run() {
 }
 
 run();
+

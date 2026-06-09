@@ -221,6 +221,8 @@ const reviewKYC = async (req, res) => {
         'UPDATE users SET is_kyc_verified = 1, credit_limit = ?, interest_rate = ? WHERE id = ?',
         [limitVal, rateVal, userId]
       );
+    } else {
+      await pool.query('UPDATE users SET is_kyc_verified = 0 WHERE id = ?', [userId]);
     }
 
     const title = status === 'approved' ? '✅ KYC Verified!' : '❌ KYC Rejected';

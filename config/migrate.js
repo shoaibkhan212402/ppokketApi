@@ -4,8 +4,7 @@ const mysql = require('mysql2/promise');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 const migrate = async () => {
-  console.log('Starting migration to database:', process.env.DB_NAME);
-  
+
   const connection = await mysql.createConnection({
     host: process.env.DB_HOST,
     port: process.env.DB_PORT || 3306,
@@ -24,11 +23,10 @@ const migrate = async () => {
       .replace(/CREATE DATABASE[\s\S]*?;/i, '')
       .replace(/USE[\s\S]*?;/i, '');
 
-    console.log('Cleaned schema statements. Executing database tables setup...');
-    
+
     // Split queries by semicolon to execute one by one or run as multiple statements
     await connection.query(schemaSql);
-    console.log('✅ Database migration completed successfully.');
+
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
   } finally {
@@ -37,3 +35,4 @@ const migrate = async () => {
 };
 
 migrate();
+

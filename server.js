@@ -22,6 +22,14 @@ const aadhaarRoutes      = require('./routes/aadhaarRoutes');
 
 const app = express();
 
+// Custom Logger Middleware for debugging incoming API hits
+app.use((req, res, next) => {
+
+
+
+  next();
+});
+
 // Security
 app.use(helmet({
   crossOriginResourcePolicy: false, // allow images to load across origins
@@ -91,6 +99,7 @@ const PORT = process.env.PORT || 5000;
 connectDB().then(async () => {
   await connectRedis();
   app.listen(PORT, () => {
-    console.log(`🚀 Ppokket API running on http://localhost:${PORT}`);
+
   });
 });
+

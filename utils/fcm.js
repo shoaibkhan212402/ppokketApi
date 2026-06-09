@@ -9,7 +9,7 @@ const sendNotification = async (fcmToken, title, body, data = {}) => {
       token: fcmToken,
     };
     const response = await admin.messaging().send(message);
-    console.log('FCM sent:', response);
+
     return response;
   } catch (err) {
     console.error('FCM Error:', err.message);
@@ -25,7 +25,7 @@ const sendMulticast = async (tokens, title, body, data = {}) => {
       tokens,
     };
     const response = await admin.messaging().sendEachForMulticast(message);
-    console.log(`FCM multicast: ${response.successCount} sent, ${response.failureCount} failed`);
+
     return response;
   } catch (err) {
     console.error('FCM Multicast Error:', err.message);
@@ -33,3 +33,4 @@ const sendMulticast = async (tokens, title, body, data = {}) => {
 };
 
 module.exports = { sendNotification, sendMulticast };
+

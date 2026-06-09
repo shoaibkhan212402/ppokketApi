@@ -9,9 +9,23 @@ const kycFields = upload.fields([
   { name: 'aadhaar_back',  maxCount: 1 },
   { name: 'pan_card',      maxCount: 1 },
   { name: 'selfie',        maxCount: 1 },
+  { name: 'bank_passbook',  maxCount: 1 },
 ]);
 
-router.post('/upload',      protect, kycFields, uploadKYC);
+const handleKycUpload = (req, res, next) => {
+  kycFields(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, message: 'File too large. Maximum size is 10MB per file.' });
+    }
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ success: false, message: 'Unexpected file field. Use: aadhaar_front, aadhaar_back, pan_card, selfie, bank_passbook.' });
+    }
+    return res.status(400).json({ success: false, message: err.message || 'Upload failed' });
+  });
+};
+
+router.post('/upload',      protect, handleKycUpload, uploadKYC);
 router.get('/status',       protect, getKYCStatus);
 router.post('/auto-verify', protect, autoVerifyKYC);
 router.post('/pan-verify',  protect, panVerifyEndpoint);

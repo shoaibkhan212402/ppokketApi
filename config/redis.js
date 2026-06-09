@@ -13,7 +13,7 @@ const connectRedis = async () => {
     await redisClient.connect();
   } catch (err) {
     console.error('❌ Redis Connection Failed:', err.message);
-    console.log('⚠️  App will continue without Redis caching');
+
   }
 };
 
@@ -92,3 +92,4 @@ module.exports = {
   invalidateUserCache,
   CACHE_TTL,
 };
+

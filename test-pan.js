@@ -69,18 +69,15 @@ function verifyPanGet() {
 }
 
 async function run() {
-  console.log('Testing PAN verification API...');
-  console.log(`PAN: ${TEST_PAN}`);
-  console.log(`Auth Key: ${AUTH_KEY}\n`);
+
+
 
   try {
-    console.log('--- Method 1: POST Request ---');
-    const postRes = await verifyPanPost();
-    console.log(JSON.stringify(postRes, null, 2));
 
-    console.log('\n--- Method 2: GET Request ---');
+    const postRes = await verifyPanPost();
+
+
     const getRes = await verifyPanGet();
-    console.log(JSON.stringify(getRes, null, 2));
   } catch (error) {
     console.error('Error testing API:', error);
   }

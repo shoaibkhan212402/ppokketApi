@@ -17,7 +17,7 @@ const sendOTP = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid mobile number' });
     }
     // Simulate sending OTP 123456
-    console.log(`[SMS-OTP] Sent verification OTP 123456 to +91${mobile}`);
+
     res.json({ success: true, message: 'OTP sent successfully. Use 123456 for testing.' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -135,3 +135,4 @@ const adminLogin = async (req, res) => {
 };
 
 module.exports = { sendOTP, verifyOTP, demoLogin, adminLogin };
+

@@ -40,14 +40,17 @@ const sendOTP = async (req, res) => {
       });
     }
 
-    // Temporarily store reference_id in DB so verify step can retrieve it
+    const cleanAadhaar = String(aadhaar_number).replace(/\s+/g, '');
+
+    // Store Aadhaar number + reference_id so verify/auto-verify can use them
     await pool.query(
-      `UPDATE users SET aadhaar_ref_id = ?, updated_at = NOW() WHERE id = ?`,
-      [result.referenceId, userId]
+      `UPDATE users SET aadhaar_number = ?, aadhaar_ref_id = ?, updated_at = NOW() WHERE id = ?`,
+      [cleanAadhaar, result.referenceId, userId]
     );
 
     return res.json({
       success:       true,
+      referenceId:   result.referenceId,
       maskedAadhaar: result.maskedAadhaar,
       requestId:     result.requestId,
       message:       'OTP sent to your Aadhaar-linked mobile number.',

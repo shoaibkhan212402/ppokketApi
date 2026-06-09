@@ -73,7 +73,7 @@ const aadhaarSendOTP = async (aadhaarNumber) => {
 
   if (raw?.status !== 200) {
     const errDesc = SEND_OTP_ERRORS[raw?.status] || raw?.message || `API error ${raw?.status}`;
-    console.warn(`[Aadhaar SendOTP] Error ${raw?.status}: ${errDesc}`);
+
     return {
       success: false, referenceId: null, maskedAadhaar: null,
       requestId: raw?.request_id || null, message: errDesc,
@@ -81,7 +81,7 @@ const aadhaarSendOTP = async (aadhaarNumber) => {
     };
   }
 
-  console.log(`[Aadhaar SendOTP] OTP sent – masked: ${raw.data?.masked_aadhaar}, ref: ${raw.data?.reference_id}`);
+
   return {
     success:       true,
     referenceId:   raw.data?.reference_id   || null,
@@ -140,7 +140,7 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
 
   if (raw?.status !== 200) {
     const errDesc = VERIFY_OTP_ERRORS[raw?.status] || raw?.message || `API error ${raw?.status}`;
-    console.warn(`[Aadhaar VerifyOTP] Error ${raw?.status}: ${errDesc}`);
+
     return {
       success: false, verified: false, name: null, dob: null, gender: null,
       careOf: null, fullAddress: null, address: null, photo: null, hasPhoto: false,
@@ -150,7 +150,6 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
   }
 
   const d = raw?.data || {};
-  console.log(`[Aadhaar VerifyOTP] verified=${d.verified}, name=${d.name}, requestId=${raw.request_id}`);
 
   return {
     success:     true,
@@ -171,3 +170,4 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
 };
 
 module.exports = { aadhaarSendOTP, aadhaarVerifyOTP };
+

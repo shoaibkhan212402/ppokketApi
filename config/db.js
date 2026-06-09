@@ -18,11 +18,10 @@ const connectDB = async () => {
   const port = process.env.DB_PORT || 3306;
   const user = process.env.DB_USER || 'root';
   const database = process.env.DB_NAME || 'ppokket_db';
-  console.log(`⚙️ Attempting MySQL connection to ${user}@${host}:${port}/${database}...`);
-  
+
   try {
     const conn = await pool.getConnection();
-    console.log(`✅ MySQL Connected successfully to ${host}:${port}`);
+
     conn.release();
   } catch (err) {
     console.error('❌ MySQL Connection Error details:', err);
@@ -32,4 +31,5 @@ const connectDB = async () => {
 };
 
 module.exports = { pool, connectDB };
+
 
