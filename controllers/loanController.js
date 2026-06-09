@@ -78,6 +78,7 @@ const applyLoan = async (req, res) => {
     await invalidateUserCache(userId);
     await delCache('admin:dashboard');
   } catch (err) {
+    console.error('[applyLoan]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -97,6 +98,7 @@ const getLoanHistory = async (req, res) => {
     await setCache(cacheKey, response, CACHE_TTL.MEDIUM);
     res.json(response);
   } catch (err) {
+    console.error('[getLoanHistory]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -121,6 +123,7 @@ const getLoanDetails = async (req, res) => {
 
     res.json({ success: true, loan: loan[0], emi_schedule: emiSchedule, transactions });
   } catch (err) {
+    console.error('[getLoanDetails]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -144,6 +147,7 @@ const emiCalculator = async (req, res) => {
       interest_rate: rateVal,
     });
   } catch (err) {
+    console.error('[emiCalculator]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

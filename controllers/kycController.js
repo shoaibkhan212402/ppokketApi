@@ -139,6 +139,7 @@ const uploadKYC = async (req, res) => {
     await invalidateUserCache(userId);
     await delCache('admin:dashboard');
   } catch (err) {
+    console.error('[uploadKYC]', err);
     fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] Outer catch error: ${err.message}\nStack: ${err.stack}\n`);
     res.status(500).json({ success: false, message: err.message });
   }
@@ -191,6 +192,7 @@ const getKYCStatus = async (req, res) => {
     await setCache(cacheKey, response, CACHE_TTL.MEDIUM);
     res.json(response);
   } catch (err) {
+    console.error('[getKYCStatus]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -269,6 +271,7 @@ const autoVerifyKYC = async (req, res) => {
       message: 'KYC submitted successfully. Our team will verify your documents within 24–48 working hours.',
     });
   } catch (err) {
+    console.error('[autoVerifyKYC]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

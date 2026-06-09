@@ -44,6 +44,7 @@ const getAdminDashboard = async (req, res) => {
     await setCache(cacheKey, response, CACHE_TTL.LONG);
     res.json(response);
   } catch (err) {
+    console.error('[getAdminDashboard]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -75,6 +76,7 @@ const getAllUsers = async (req, res) => {
 
     res.json({ success: true, users, total, page: parseInt(page), limit: parseInt(limit) });
   } catch (err) {
+    console.error('[getAllUsers]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -98,6 +100,7 @@ const getAllLoans = async (req, res) => {
 
     res.json({ success: true, loans });
   } catch (err) {
+    console.error('[getAllLoans]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -149,6 +152,7 @@ const approveLoan = async (req, res) => {
     await invalidateUserCache(loan[0].user_id);
     await delCache('admin:dashboard');
   } catch (err) {
+    console.error('[approveLoan]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -176,6 +180,7 @@ const rejectLoan = async (req, res) => {
     await invalidateUserCache(loan[0].user_id);
     await delCache('admin:dashboard');
   } catch (err) {
+    console.error('[rejectLoan]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -193,6 +198,7 @@ const getPendingKYC = async (req, res) => {
     );
     res.json({ success: true, kycs });
   } catch (err) {
+    console.error('[getPendingKYC]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -246,6 +252,7 @@ const reviewKYC = async (req, res) => {
     await invalidateUserCache(userId);
     await delCache('admin:dashboard');
   } catch (err) {
+    console.error('[reviewKYC]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -263,6 +270,7 @@ const getAllTransactions = async (req, res) => {
     );
     res.json({ success: true, transactions: txns });
   } catch (err) {
+    console.error('[getAllTransactions]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -306,6 +314,7 @@ const sendBulkNotification = async (req, res) => {
 
     res.json({ success: true, message: 'Notifications sent' });
   } catch (err) {
+    console.error('[sendBulkNotification]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -380,6 +389,7 @@ const disburseLoan = async (req, res) => {
     await invalidateUserCache(userId);
     await delCache('admin:dashboard');
   } catch (err) {
+    console.error('[disburseLoan]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -419,6 +429,7 @@ const getLoanEMISchedule = async (req, res) => {
 
     return res.json({ success: true, emi_schedule: mappedPreview });
   } catch (err) {
+    console.error('[getLoanEMISchedule]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -458,6 +469,7 @@ const updateCreditLimit = async (req, res) => {
     await invalidateUserCache(userId);
     res.json({ success: true, message: 'Credit limit and interest rate updated successfully' });
   } catch (err) {
+    console.error('[updateCreditLimit]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -481,6 +493,7 @@ const toggleUserStatus = async (req, res) => {
       is_active: newStatus
     });
   } catch (err) {
+    console.error('[toggleUserStatus]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -511,6 +524,7 @@ const changeAdminPassword = async (req, res) => {
     await pool.query('UPDATE admins SET password = ? WHERE id = ?', [hashedPassword, adminId]);
     res.json({ success: true, message: 'Password updated successfully' });
   } catch (err) {
+    console.error('[changeAdminPassword]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -535,6 +549,7 @@ const getSystemSettings = async (req, res) => {
     const data = fs.readFileSync(filePath, 'utf8');
     res.json(JSON.parse(data));
   } catch (err) {
+    console.error('[getSystemSettings]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -555,6 +570,7 @@ const updateSystemSettings = async (req, res) => {
     fs.writeFileSync(filePath, JSON.stringify(settings, null, 2));
     res.json({ success: true, message: 'System settings saved successfully', settings });
   } catch (err) {
+    console.error('[updateSystemSettings]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

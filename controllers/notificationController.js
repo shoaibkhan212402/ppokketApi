@@ -9,6 +9,7 @@ const getNotifications = async (req, res) => {
     );
     res.json({ success: true, notifications: notifs });
   } catch (err) {
+    console.error('[getNotifications]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -22,6 +23,7 @@ const markRead = async (req, res) => {
     );
     res.json({ success: true, message: 'Marked as read' });
   } catch (err) {
+    console.error('[markRead]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -32,6 +34,7 @@ const markAllRead = async (req, res) => {
     await pool.query('UPDATE notifications SET is_read = 1 WHERE user_id = ?', [req.user.id]);
     res.json({ success: true, message: 'All notifications marked as read' });
   } catch (err) {
+    console.error('[markAllRead]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
