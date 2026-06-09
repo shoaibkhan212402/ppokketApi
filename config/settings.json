@@ -1,0 +1,7 @@
+{
+  "interest_rate": 2.5,
+  "max_credit_limit": 50000,
+  "min_loan_amount": 1000,
+  "processing_fee_pct": 2,
+  "late_fee": 200
+}
