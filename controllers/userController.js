@@ -32,6 +32,7 @@ const getProfile = async (req, res) => {
     await setCache(cacheKey, response, CACHE_TTL.SHORT);
     res.json(response);
   } catch (err) {
+    console.error('[getProfile]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -62,6 +63,7 @@ const updateProfile = async (req, res) => {
     await invalidateUserCache(req.user.id);
     res.json({ success: true, message: 'Profile updated', user });
   } catch (err) {
+    console.error('[updateProfile]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -84,6 +86,7 @@ const updateBankDetails = async (req, res) => {
     );
     res.json({ success: true, message: 'Bank details saved' });
   } catch (err) {
+    console.error('[updateBankDetails]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -138,6 +141,7 @@ const verifyBankDetails = async (req, res) => {
       message: 'Bank account verified successfully via dummy gateway.'
     });
   } catch (err) {
+    console.error('[verifyBankDetails]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -185,6 +189,7 @@ const getDashboard = async (req, res) => {
     await setCache(cacheKey, response, CACHE_TTL.SHORT);
     res.json(response);
   } catch (err) {
+    console.error('[getDashboard]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -275,6 +280,7 @@ const checkEligibility = async (req, res) => {
       suggested_limit: limit,
     });
   } catch (err) {
+    console.error('[checkEligibility]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

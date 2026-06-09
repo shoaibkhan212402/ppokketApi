@@ -19,6 +19,7 @@ const sendOTP = async (req, res) => {
 
     res.json({ success: true, message: 'OTP sent successfully. Use 123456 for testing.' });
   } catch (err) {
+    console.error('[sendOTP]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -129,6 +130,7 @@ const adminLogin = async (req, res) => {
       admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role },
     });
   } catch (err) {
+    console.error('[adminLogin]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };

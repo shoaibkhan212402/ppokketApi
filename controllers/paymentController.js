@@ -65,6 +65,7 @@ const createOrder = async (req, res) => {
       key: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholderkey',
     });
   } catch (err) {
+    console.error('[createOrder]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -140,6 +141,7 @@ const verifyPayment = async (req, res) => {
       payment_id: razorpay_payment_id,
     });
   } catch (err) {
+    console.error('[verifyPayment]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -156,6 +158,7 @@ const getPaymentHistory = async (req, res) => {
     );
     res.json({ success: true, transactions });
   } catch (err) {
+    console.error('[getPaymentHistory]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
