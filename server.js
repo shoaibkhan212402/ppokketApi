@@ -22,27 +22,24 @@ const aadhaarRoutes      = require('./routes/aadhaarRoutes');
 
 const app = express();
 
-// Custom Logger Middleware for debugging incoming API hits
-app.use((req, res, next) => {
-
-
-
-  next();
-});
+// Trust reverse-proxy (Render, etc.) so rate-limiters see real client IPs
+app.set('trust proxy', 1);
 
 // Security
 app.use(helmet({
-  crossOriginResourcePolicy: false, // allow images to load across origins
+  crossOriginResourcePolicy: false,
 }));
 app.use(cors({
-  origin: '*', // allow any origin including expo and mobile app
-  credentials: true,
+  origin: '*',
+  credentials: false, // credentials:true + wildcard origin is rejected by browsers
 }));
 
 // Global rate limiter
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later.' },
 });
 app.use('/api/', limiter);

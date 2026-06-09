@@ -13,10 +13,9 @@ const generateToken = (id, role = 'user') => {
 const sendOTP = async (req, res) => {
   try {
     const { mobile } = req.body;
-    if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
+    if (!mobile || !/^\d{10}$/.test(mobile)) {
       return res.status(400).json({ success: false, message: 'Invalid mobile number' });
     }
-    // Simulate sending OTP 123456
 
     res.json({ success: true, message: 'OTP sent successfully. Use 123456 for testing.' });
   } catch (err) {
@@ -26,7 +25,7 @@ const sendOTP = async (req, res) => {
 
 // Shared verification & login logic
 const handleVerifyAndLogin = async (mobile, otp, res) => {
-  if (!mobile || !/^[6-9]\d{9}$/.test(mobile)) {
+  if (!mobile || !/^\d{10}$/.test(mobile)) {
     return res.status(400).json({ success: false, message: 'Enter a valid 10-digit mobile number' });
   }
   if (!otp || otp !== '123456') {

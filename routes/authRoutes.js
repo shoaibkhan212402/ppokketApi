@@ -4,8 +4,10 @@ const { sendOTP, verifyOTP, demoLogin, adminLogin } = require('../controllers/au
 const rateLimit = require('express-rate-limit');
 
 const otpLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 min
-  max: 5,
+  windowMs: 10 * 60 * 1000,
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { success: false, message: 'Too many OTP requests. Please try after 10 minutes.' },
 });
 
