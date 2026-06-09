@@ -32,9 +32,13 @@ const applyLoan = async (req, res) => {
     const [userRows] = await pool.query('SELECT credit_limit, interest_rate FROM users WHERE id = ?', [userId]);
     if (!userRows.length) return res.status(404).json({ success: false, message: 'User not found' });
     const user = userRows[0];
+    const creditLimit = Number(user.credit_limit) || 0;
 
-    if (amount > user.credit_limit) {
-      return res.status(400).json({ success: false, message: `Loan amount exceeds your credit limit of ₹${user.credit_limit}` });
+    if (creditLimit <= 0) {
+      return res.status(400).json({ success: false, message: 'Your credit limit has not been assigned yet. Please wait for admin review.' });
+    }
+    if (amount > creditLimit) {
+      return res.status(400).json({ success: false, message: `Loan amount exceeds your credit limit of ₹${creditLimit}` });
     }
 
     const interest_rate = parseFloat(user.interest_rate) || 2.50; // Use admin-assigned ROI

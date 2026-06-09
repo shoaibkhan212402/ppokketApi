@@ -257,23 +257,22 @@ const checkEligibility = async (req, res) => {
       }
     }
     
-    // Update credit limit and credit score in database
+    // Update credit score only — credit limit is assigned by admin on KYC approval
     await pool.query(
-      'UPDATE users SET credit_score = ?, credit_limit = ?, updated_at = NOW() WHERE id = ?',
-      [score, limit, userId]
+      'UPDATE users SET credit_score = ?, updated_at = NOW() WHERE id = ?',
+      [score, userId]
     );
-    
-    // Insert notification
+
     await pool.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [userId, 'Credit Limit Assigned! 💳', `Congratulations! Based on your profile, we have assigned you a credit limit of ₹${limit} with a credit score of ${score}.`, 'system']
+      [userId, 'Credit Score Updated 📊', `Your estimated credit score is ${score}. Your credit limit will be assigned by our team after KYC review.`, 'system']
     );
-    
+
     res.json({
       success: true,
-      message: 'Eligibility check completed successfully',
+      message: 'Credit score calculated successfully. Your credit limit will be assigned by our team after KYC verification.',
       credit_score: score,
-      credit_limit: limit
+      suggested_limit: limit,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

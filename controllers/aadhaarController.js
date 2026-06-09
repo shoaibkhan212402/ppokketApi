@@ -34,8 +34,8 @@ const sendOTP = async (req, res) => {
 
     if (!result.success) {
       return res.status(400).json({
-        success:   false,
-        message:   result.message,
+        success: false,
+        message: result.message,
         errorCode: result.errorCode,
       });
     }
@@ -49,11 +49,11 @@ const sendOTP = async (req, res) => {
     );
 
     return res.json({
-      success:       true,
-      referenceId:   result.referenceId,
+      success: true,
+      referenceId: result.referenceId,
       maskedAadhaar: result.maskedAadhaar,
-      requestId:     result.requestId,
-      message:       'OTP sent to your Aadhaar-linked mobile number.',
+      requestId: result.requestId,
+      message: 'OTP sent to your Aadhaar-linked mobile number.',
     });
   } catch (err) {
     console.error('[sendOTP]', err.message);
@@ -96,9 +96,9 @@ const verifyOTP = async (req, res) => {
 
     if (!result.success || !result.verified) {
       return res.status(400).json({
-        success:   false,
-        verified:  false,
-        message:   result.message || 'Aadhaar OTP verification failed.',
+        success: false,
+        verified: false,
+        message: result.message || 'Aadhaar OTP verification failed.',
         errorCode: result.errorCode,
       });
     }
@@ -115,29 +115,22 @@ const verifyOTP = async (req, res) => {
       [result.name, result.dob, userId]
     );
 
-    // ── Update kyc_documents: aadhaar_verified flag ─────────────
-    // Also auto-approve KYC fully if PAN is already verified
+    // ── Update kyc_documents: mark aadhaar_verified only ────────
+    // NOTE: status stays 'pending' – only admin can approve KYC
     await pool.query(
       `INSERT INTO kyc_documents (user_id, aadhaar_verified, status)
        VALUES (?, 1, 'pending')
        ON DUPLICATE KEY UPDATE
          aadhaar_verified = 1,
-         status = IF(pan_verified = 1, 'approved', status),
-         reviewed_at = IF(pan_verified = 1, NOW(), reviewed_at),
          updated_at = NOW()`,
       [userId]
     );
 
-    // Check if KYC is now fully approved (both PAN + Aadhaar)
-    const [kycRows] = await pool.query(
-      'SELECT status, pan_verified FROM kyc_documents WHERE user_id = ?', [userId]
+    // Mark aadhaar_verified on the users row (personal field only)
+    // is_kyc_verified stays 0 until admin approves
+    await pool.query(
+      'UPDATE users SET aadhaar_verified = 1 WHERE id = ?', [userId]
     );
-    const bothVerified = kycRows[0]?.pan_verified === 1;
-    if (bothVerified) {
-      await pool.query(
-        'UPDATE users SET is_kyc_verified = 1, aadhaar_verified = 1 WHERE id = ?', [userId]
-      );
-    }
 
     // Save Aadhaar KYC record (address, photo, etc.)
     await pool.query(
@@ -169,13 +162,11 @@ const verifyOTP = async (req, res) => {
       ]
     );
 
-    // Notify
-    const notifMsg = bothVerified
-      ? '🎉 Full KYC Complete! Your PAN and Aadhaar have both been verified. You are now eligible for instant credit.'
-      : 'Your Aadhaar has been verified and KYC data has been saved to your profile.';
+    // Notify – always 'pending admin review'
+    const notifMsg = 'Your Aadhaar has been verified. Please complete the remaining KYC steps.';
     await pool.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [userId, bothVerified ? '✅ KYC Fully Verified!' : '✅ Aadhaar Verified!', notifMsg, 'kyc']
+      [userId, '✅ Aadhaar Verified!', notifMsg, 'kyc']
     );
 
     // Invalidate user cache
@@ -183,20 +174,18 @@ const verifyOTP = async (req, res) => {
     await delCache(`user:${userId}:kyc`);
 
     return res.json({
-      success:       true,
-      verified:      true,
-      fullyVerified: bothVerified,   // true when both PAN + Aadhaar done
-      message:  bothVerified
-        ? 'Aadhaar verified. KYC is now fully complete!'
-        : 'Aadhaar verified successfully.',
+      success: true,
+      verified: true,
+      fullyVerified: false,  // admin must approve – never auto-fully-verified
+      message: 'Aadhaar verified successfully. Please complete remaining KYC steps.',
       data: {
-        name:        result.name,
-        dob:         result.dob,
-        gender:      result.gender,
-        careOf:      result.careOf,
+        name: result.name,
+        dob: result.dob,
+        gender: result.gender,
+        careOf: result.careOf,
         fullAddress: result.fullAddress,
-        address:     result.address,
-        hasPhoto:    result.hasPhoto,
+        address: result.address,
+        hasPhoto: result.hasPhoto,
       },
     });
   } catch (err) {
@@ -230,22 +219,22 @@ const getAadhaarStatus = async (req, res) => {
 
     const row = rows[0];
     let address = null;
-    try { address = row.address_json ? JSON.parse(row.address_json) : null; } catch (_) {}
+    try { address = row.address_json ? JSON.parse(row.address_json) : null; } catch (_) { }
 
     return res.json({
-      success:  true,
+      success: true,
       verified: true,
       data: {
-        name:        row.name,
-        dob:         row.dob,
-        gender:      row.gender,
-        careOf:      row.care_of,
+        name: row.name,
+        dob: row.dob,
+        gender: row.gender,
+        careOf: row.care_of,
         fullAddress: row.full_address,
         address,
-        hasPhoto:    !!row.has_photo,
-        requestId:   row.request_id,
-        createdAt:   row.created_at,
-        updatedAt:   row.updated_at,
+        hasPhoto: !!row.has_photo,
+        requestId: row.request_id,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
       },
     });
   } catch (err) {

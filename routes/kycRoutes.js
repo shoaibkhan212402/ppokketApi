@@ -15,6 +15,21 @@ const kycFields = upload.fields([
 const handleKycUpload = (req, res, next) => {
   kycFields(req, res, (err) => {
     if (!err) return next();
+    
+    // Log error for debugging
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const logPath = path.join(__dirname, '../errors.log');
+      fs.appendFileSync(
+        logPath,
+        `[${new Date().toISOString()}] [handleKycUpload] Multer error: ${err.message || 'Unknown'}\nStack: ${err.stack || ''}\n`
+      );
+    } catch (logErr) {
+      console.error('Failed to write to error log:', logErr.message);
+    }
+    console.error('❌ Multer error:', err);
+
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ success: false, message: 'File too large. Maximum size is 10MB per file.' });
     }

@@ -180,7 +180,7 @@ const rejectLoan = async (req, res) => {
   }
 };
 
-// GET /api/admin/kyc - pending KYC list
+// GET /api/admin/kyc - KYC list
 const getPendingKYC = async (req, res) => {
   try {
     const [kycs] = await pool.query(
@@ -189,7 +189,6 @@ const getPendingKYC = async (req, res) => {
        FROM kyc_documents k
        JOIN users u ON u.id = k.user_id
        LEFT JOIN bank_details bd ON bd.user_id = u.id
-       WHERE k.status = 'pending'
        ORDER BY k.created_at ASC`
     );
     res.json({ success: true, kycs });
@@ -216,6 +215,9 @@ const reviewKYC = async (req, res) => {
 
     if (status === 'approved') {
       const limitVal = credit_limit !== undefined && credit_limit !== null ? parseFloat(credit_limit) : 10000.00;
+      if (Number.isNaN(limitVal) || limitVal <= 0) {
+        return res.status(400).json({ success: false, message: 'Please provide a valid credit limit greater than 0.' });
+      }
       const rateVal = interest_rate !== undefined && interest_rate !== null ? parseFloat(interest_rate) : 2.50;
       await pool.query(
         'UPDATE users SET is_kyc_verified = 1, credit_limit = ?, interest_rate = ? WHERE id = ?',
@@ -390,7 +392,32 @@ const getLoanEMISchedule = async (req, res) => {
       'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
       [loanId]
     );
-    res.json({ success: true, emi_schedule: schedule });
+
+    if (schedule.length) {
+      return res.json({ success: true, emi_schedule: schedule });
+    }
+
+    // Dynamic generation if empty (pending loans)
+    const [loan] = await pool.query('SELECT * FROM loans WHERE id = ?', [loanId]);
+    if (!loan.length) {
+      return res.json({ success: true, emi_schedule: [] });
+    }
+
+    const preview = generateEMISchedule(loan[0]);
+    const mappedPreview = preview.map(inst => ({
+      id: `preview-${inst.installment_no}`,
+      loan_id: loanId,
+      user_id: loan[0].user_id,
+      installment_no: inst.installment_no,
+      due_date: inst.due_date,
+      emi_amount: inst.emi_amount,
+      principal_amount: inst.principal,
+      interest_amount: inst.interest,
+      status: 'upcoming',
+      paid_at: null
+    }));
+
+    return res.json({ success: true, emi_schedule: mappedPreview });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
