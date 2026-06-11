@@ -1,83 +1,42 @@
 const https = require('https');
 
-const API_URL = 'https://apitxt.com/api/panVerify';
-const AUTH_KEY = 'RtA9FdfvRkK7E4sRn8DfejJ4OVfvaGcQ1tSBhRxzTEY';
+const API_URL = 'https://api.quickekyc.com/api/v1/pan/pan_advance';
+const API_KEY = process.env.QUICKEKYC_API_KEY || 'b836431f-1e6b-45dd-8e6d-6ea81b40da99';
 const TEST_PAN = 'KSJPS2535H';
-const TEST_NAME = 'mohammad shoaib khan';
-const TEST_DOB = '15/05/2002';
 
-function verifyPanPost() {
+function verifyPan() {
   return new Promise((resolve, reject) => {
-    const payload = JSON.stringify({
-      authkey: AUTH_KEY,
-      pan: TEST_PAN,
-      name: TEST_NAME,
-      dob: TEST_DOB
-    });
+    const payload = JSON.stringify({ key: API_KEY, id_number: TEST_PAN });
 
+    const url = new URL(API_URL);
     const options = {
+      hostname: url.hostname,
+      path: url.pathname,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload)
-      }
+        'Content-Length': Buffer.byteLength(payload),
+      },
     };
 
-    const req = https.request(API_URL, options, (res) => {
+    const req = https.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
+      res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          resolve(data);
-        }
+        try { resolve(JSON.parse(data)); } catch (e) { resolve(data); }
       });
     });
 
-    req.on('error', (err) => {
-      reject(err);
-    });
-
+    req.on('error', reject);
     req.write(payload);
     req.end();
   });
 }
 
-function verifyPanGet() {
-  return new Promise((resolve, reject) => {
-    const url = `${API_URL}?authkey=${encodeURIComponent(AUTH_KEY)}&pan=${encodeURIComponent(TEST_PAN)}&name=${encodeURIComponent(TEST_NAME)}&dob=${encodeURIComponent(TEST_DOB)}`;
-
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          resolve(data);
-        }
-      });
-    }).on('error', (err) => {
-      reject(err);
-    });
-  });
-}
-
 async function run() {
-
-
-
   try {
-
-    const postRes = await verifyPanPost();
-
-
-    const getRes = await verifyPanGet();
+    const result = await verifyPan();
+    console.log('PAN Verify Response:', JSON.stringify(result, null, 2));
   } catch (error) {
     console.error('Error testing API:', error);
   }

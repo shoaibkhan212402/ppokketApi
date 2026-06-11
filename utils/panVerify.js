@@ -1,85 +1,57 @@
 const axios = require('axios');
 
-const PAN_VERIFY_BASE_URL = process.env.PAN_VERIFY_BASE_URL || 'https://apitxt.com/api/panVerify';
-const PAN_VERIFY_AUTH_KEY = process.env.PAN_VERIFY_AUTH_KEY || '';
+const QUICKEKYC_BASE_URL = 'https://api.quickekyc.com/api/v1/pan/pan_advance';
+const QUICKEKYC_API_KEY = process.env.QUICKEKYC_API_KEY || '';
 
 /**
- * Error code map from apitxt PAN Verification API
+ * Parse "DD-MM-YYYY" (quickekyc format) to "YYYY-MM-DD" for MySQL.
  */
-const API_ERROR_CODES = {
-  105: 'Missing Authentication Key.',
-  106: 'Missing PAN number.',
-  107: 'Missing name (as per PAN).',
-  108: 'Missing date of birth.',
-  206: 'Invalid PAN format. Must be ABCDE1234F.',
-  207: 'Invalid date of birth format. Must be DD/MM/YYYY.',
-  301: 'Insufficient wallet balance. Please recharge your API account.',
-  304: 'Invalid Authentication Key or IP Restricted.',
-  310: 'Verification failed due to vendor/gateway error.',
+const parseDobToMySQL = (dob) => {
+  if (!dob) return null;
+  const parts = String(dob).trim().split('-');
+  if (parts.length !== 3) return null;
+  const [d, m, y] = parts;
+  if (!d || !m || !y || y.length !== 4) return null;
+  return `${y}-${m}-${d}`;
 };
 
 /**
- * Format a MySQL/JS Date to DD/MM/YYYY required by the API
- * @param {Date|string} dob
- * @returns {string} formatted date or empty string on failure
- */
-const formatDob = (dob) => {
-  if (!dob) return '';
-  const d = new Date(dob);
-  if (isNaN(d.getTime())) return '';
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
-  return `${day}/${month}/${year}`;
-};
-
-/**
- * Verify a PAN card using the apitxt.com gateway.
+ * Fetch PAN holder details from quickekyc.com pan_advance endpoint.
  *
  * @param {Object} params
- * @param {string} params.pan       - 10-character PAN (e.g. ABCDE1234F)
- * @param {string} params.name      - Name as on PAN card
- * @param {string|Date} params.dob  - Date of birth (JS Date, ISO string, or DD/MM/YYYY)
+ * @param {string} params.pan - 10-character PAN (e.g. ABCDE1234F)
  *
  * @returns {Promise<{
  *   success: boolean,
  *   verified: boolean,
- *   status: string,
- *   category: string,
+ *   panNumber: string|null,
  *   fullName: string|null,
- *   nameMatch: boolean,
- *   dobMatch: boolean,
- *   aadhaarSeedingStatus: string,
- *   requestId: string,
+ *   category: string|null,
+ *   dob: string|null,
+ *   dobMySQL: string|null,
+ *   gender: string|null,
+ *   mobileNo: string|null,
+ *   email: string|null,
+ *   address: Object|null,
+ *   requestId: number|null,
  *   message: string|null,
- *   errorCode: number|null,
  *   raw: Object
  * }>}
  */
-const verifyPAN = async ({ pan, name, dob }) => {
-  const authKey = PAN_VERIFY_AUTH_KEY;
-  if (!authKey) {
-    throw new Error('PAN_VERIFY_AUTH_KEY is not configured in .env');
+const verifyPAN = async ({ pan }) => {
+  const apiKey = QUICKEKYC_API_KEY;
+  if (!apiKey) {
+    throw new Error('QUICKEKYC_API_KEY is not configured in .env');
   }
 
-  // Normalize inputs
   const panClean = (pan || '').trim().toUpperCase();
-  const nameClean = (name || '').trim();
-
-  // Accept DD/MM/YYYY directly or format from Date/ISO
-  const dobFormatted = /^\d{2}\/\d{2}\/\d{4}$/.test(dob)
-    ? dob
-    : formatDob(dob);
-
   if (!panClean) throw new Error('PAN number is required for verification.');
-  if (!nameClean) throw new Error('Name is required for PAN verification.');
-  if (!dobFormatted) throw new Error('Valid date of birth is required for PAN verification.');
 
   let rawResponse;
   try {
     const response = await axios.post(
-      PAN_VERIFY_BASE_URL,
-      { authkey: authKey, pan: panClean, name: nameClean, dob: dobFormatted },
+      QUICKEKYC_BASE_URL,
+      { key: apiKey, id_number: panClean },
       { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
     );
     rawResponse = response.data;
@@ -89,47 +61,49 @@ const verifyPAN = async ({ pan, name, dob }) => {
     console.error('[PAN Verify] HTTP error:', statusCode, apiBody || err.message);
 
     if (process.env.NODE_ENV === 'development') {
-
       return {
         success: true,
         verified: true,
-        status: 'valid',
+        panNumber: panClean,
+        fullName: 'MOCK USER',
         category: 'individual',
-        fullName: nameClean.toUpperCase(),
-        nameMatch: true,
-        dobMatch: true,
-        aadhaarSeedingStatus: 'y',
+        dob: '01-01-1990',
+        dobMySQL: '1990-01-01',
+        gender: 'M',
+        mobileNo: null,
+        email: null,
+        address: null,
         requestId: `PAN-MOCK-${Date.now()}`,
         message: null,
-        errorCode: null,
         raw: { mock: true, error: err.message },
       };
     }
     throw new Error('PAN verification service is temporarily unavailable. Please try again later.');
   }
 
-  const httpStatus = rawResponse?.status;
+  const statusCode = rawResponse?.status_code;
+  const status = rawResponse?.status;
   const data = rawResponse?.data || {};
   const requestId = rawResponse?.request_id || null;
 
-  // Handle known API error codes
-  if (httpStatus !== 200) {
-    const errorDesc = API_ERROR_CODES[httpStatus] || rawResponse?.message || `API error code ${httpStatus}`;
+  if (statusCode !== 200 || status !== 'success') {
+    const errorMsg = rawResponse?.message || `PAN verification failed (code: ${statusCode})`;
 
     if (process.env.NODE_ENV === 'development') {
-
       return {
         success: true,
         verified: true,
-        status: 'valid',
+        panNumber: panClean,
+        fullName: 'MOCK USER',
         category: 'individual',
-        fullName: nameClean.toUpperCase(),
-        nameMatch: true,
-        dobMatch: true,
-        aadhaarSeedingStatus: 'y',
+        dob: '01-01-1990',
+        dobMySQL: '1990-01-01',
+        gender: 'M',
+        mobileNo: null,
+        email: null,
+        address: null,
         requestId: requestId || `PAN-MOCK-${Date.now()}`,
         message: null,
-        errorCode: null,
         raw: rawResponse,
       };
     }
@@ -137,48 +111,51 @@ const verifyPAN = async ({ pan, name, dob }) => {
     return {
       success: false,
       verified: false,
-      status: 'error',
-      category: null,
+      panNumber: null,
       fullName: null,
-      nameMatch: false,
-      dobMatch: false,
-      aadhaarSeedingStatus: null,
+      category: null,
+      dob: null,
+      dobMySQL: null,
+      gender: null,
+      mobileNo: null,
+      email: null,
+      address: null,
       requestId,
-      message: errorDesc,
-      errorCode: httpStatus,
+      message: errorMsg,
       raw: rawResponse,
     };
   }
 
-  const verified = !!(data.verified && data.status === 'valid');
-  const nameMatch = !!data.name_match;
-  const dobMatch = !!data.dob_match;
+  const dobMySQL = parseDobToMySQL(data.dob);
 
-  // Build human-readable rejection reason if not verified
-  let message = null;
-  if (!verified) {
-    if (!nameMatch && !dobMatch) message = 'Name and date of birth do not match PAN records.';
-    else if (!nameMatch) message = 'Name does not match PAN records.';
-    else if (!dobMatch) message = 'Date of birth does not match PAN records.';
-    else message = data.message || 'PAN card could not be verified.';
-  }
-
+  const address = {
+    line1: data.address_line_1 || null,
+    line2: data.address_line_2 || null,
+    line3: data.address_line_3 || null,
+    line4: data.address_line_4 || null,
+    line5: data.address_line_5 || null,
+    subDist: data.sub_dist || null,
+    dist: data.dist || null,
+    state: data.state || null,
+    pincode: data.pincode || null,
+  };
 
   return {
     success: true,
-    verified,
-    status: data.status || 'unknown',
-    category: data.category || null,
+    verified: true,
+    panNumber: data.pan_number || panClean,
     fullName: data.full_name || null,
-    nameMatch,
-    dobMatch,
-    aadhaarSeedingStatus: data.aadhaar_seeding_status || null,
+    category: data.category || null,
+    dob: data.dob || null,
+    dobMySQL,
+    gender: data.gender || null,
+    mobileNo: data.mobile_no || null,
+    email: data.email || null,
+    address,
     requestId,
-    message,
-    errorCode: null,
+    message: null,
     raw: rawResponse,
   };
 };
 
-module.exports = { verifyPAN, formatDob };
-
+module.exports = { verifyPAN, parseDobToMySQL };

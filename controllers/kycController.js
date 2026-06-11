@@ -281,53 +281,42 @@ const panVerifyEndpoint = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    let { pan, name, dob } = req.body;
+    let { pan } = req.body;
 
-    if (!pan || !name || !dob) {
+    if (!pan) {
       const [rows] = await pool.query(
-        'SELECT pan_number, full_name, date_of_birth FROM users WHERE id = ?',
+        'SELECT pan_number FROM users WHERE id = ?',
         [userId]
       );
       if (!rows.length) return res.status(404).json({ success: false, message: 'User not found.' });
-      pan = pan || rows[0].pan_number;
-      name = name || rows[0].full_name;
-      dob = dob || rows[0].date_of_birth;
+      pan = rows[0].pan_number;
     }
 
-    if (!pan || !name || !dob) {
+    if (!pan) {
       return res.status(400).json({
         success: false,
-        message: 'pan, name, and dob are required (or fill your profile first).'
+        message: 'pan is required (or save your PAN in your profile first).'
       });
     }
 
-    const result = await verifyPAN({ pan, name, dob });
-
-    // ── Persist result to DB ──────────────────────────────────
-    const verifiedName = result.fullName || name;
+    const result = await verifyPAN({ pan });
 
     if (result.verified) {
-      let dobValue = null;
-      if (dob) {
-        const dobStr = String(dob).trim();
-        if (/^\d{2}\/\d{2}\/\d{4}$/.test(dobStr)) {
-          const [d, m, y] = dobStr.split('/');
-          dobValue = `${y}-${m}-${d}`;
-        } else if (/^\d{4}-\d{2}-\d{2}$/.test(dobStr)) {
-          dobValue = dobStr;
-        }
-      }
-
-      // Mark pan_verified and persist PAN + DOB on users
+      // Mark pan_verified and update profile with data returned by API
       await pool.query(
-        `UPDATE users SET 
-          pan_verified = 1, 
-          pan_number = ?, 
-          full_name = ?, 
+        `UPDATE users SET
+          pan_verified = 1,
+          pan_number = ?,
+          full_name = COALESCE(NULLIF(?, ''), full_name),
           date_of_birth = COALESCE(date_of_birth, ?),
-          updated_at = NOW() 
+          updated_at = NOW()
          WHERE id = ?`,
-        [pan.trim().toUpperCase(), verifiedName, dobValue, userId]
+        [
+          result.panNumber,
+          result.fullName || '',
+          result.dobMySQL || null,
+          userId,
+        ]
       );
 
       // Ensure kyc_documents row exists and mark pan_verified
@@ -338,10 +327,9 @@ const panVerifyEndpoint = async (req, res) => {
            pan_verified = 1,
            pan_verify_request_id = VALUES(pan_verify_request_id),
            updated_at = NOW()`,
-        [userId, result.requestId]
+        [userId, String(result.requestId || '')]
       );
 
-      // Invalidate cache
       await delCache(`user:${userId}:kyc`);
       await invalidateUserCache(userId);
     }
@@ -349,15 +337,14 @@ const panVerifyEndpoint = async (req, res) => {
     return res.json({
       success: result.success,
       verified: result.verified,
-      status: result.status,
+      panNumber: result.panNumber,
+      fullName: result.fullName,
       category: result.category,
-      nameMatch: result.nameMatch,
-      dobMatch: result.dobMatch,
-      fullName: verifiedName,
-      aadhaarSeedingStatus: result.aadhaarSeedingStatus,
+      dob: result.dob,
+      gender: result.gender,
+      address: result.address,
       requestId: result.requestId,
       message: result.message,
-      errorCode: result.errorCode,
     });
   } catch (err) {
     console.error('[panVerifyEndpoint]', err.message);
