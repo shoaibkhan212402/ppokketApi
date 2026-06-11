@@ -72,6 +72,7 @@ const createOrder = async (req, res) => {
 
 // POST /api/payment/verify
 const verifyPayment = async (req, res) => {
+  const conn = await pool.getConnection();
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, loan_id } = req.body;
     const userId = req.user.id;
@@ -85,22 +86,38 @@ const verifyPayment = async (req, res) => {
         .digest('hex');
 
       if (expectedSignature !== razorpay_signature) {
+        conn.release();
         return res.status(400).json({ success: false, message: 'Payment verification failed' });
       }
     }
 
-    // Get transaction
-    const [txn] = await pool.query(
-      'SELECT * FROM transactions WHERE razorpay_order_id = ? AND user_id = ?',
+    await conn.beginTransaction();
+
+    // Get transaction with a row-level lock
+    const [txn] = await conn.query(
+      'SELECT * FROM transactions WHERE razorpay_order_id = ? AND user_id = ? FOR UPDATE',
       [razorpay_order_id, userId]
     );
 
     if (!txn.length) {
+      await conn.rollback();
+      conn.release();
       return res.status(404).json({ success: false, message: 'Transaction not found' });
     }
 
+    // Skip processing if already marked success to prevent double credit / double EMIs paid
+    if (txn[0].status === 'success') {
+      await conn.commit();
+      conn.release();
+      return res.json({
+        success: true,
+        message: 'Payment already processed successfully',
+        payment_id: txn[0].razorpay_payment_id || razorpay_payment_id,
+      });
+    }
+
     // Update transaction
-    await pool.query(
+    await conn.query(
       `UPDATE transactions SET
         razorpay_payment_id = ?,
         razorpay_signature = ?,
@@ -111,29 +128,32 @@ const verifyPayment = async (req, res) => {
 
     // Update loan amount_paid
     const paidAmount = txn[0].amount;
-    await pool.query(
+    await conn.query(
       `UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?`,
       [paidAmount, loan_id]
     );
 
     // Mark EMI as paid
-    await pool.query(
+    await conn.query(
       `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
        WHERE loan_id = ? AND status = 'upcoming' ORDER BY due_date ASC LIMIT 1`,
       [paidAmount, loan_id]
     );
 
     // Check if loan fully paid
-    const [loan] = await pool.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
-    if (loan[0].amount_paid >= loan[0].total_payable) {
-      await pool.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
+    const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
+    if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+      await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
     }
 
     // Notification
-    await pool.query(
+    await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [userId, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received. Payment ID: ${razorpay_payment_id}`, 'payment']
     );
+
+    await conn.commit();
+    conn.release();
 
     res.json({
       success: true,
@@ -141,6 +161,10 @@ const verifyPayment = async (req, res) => {
       payment_id: razorpay_payment_id,
     });
   } catch (err) {
+    try {
+      await conn.rollback();
+    } catch (_) {}
+    conn.release();
     console.error('[verifyPayment]', err);
     res.status(500).json({ success: false, message: err.message });
   }
@@ -192,62 +216,76 @@ const handleWebhook = async (req, res) => {
       const razorpay_signature = signature;
       const amount = paymentEntity.amount / 100; // paise to rupees
       
-      // Get transaction
-      const [txn] = await pool.query(
-        'SELECT * FROM transactions WHERE razorpay_order_id = ?',
-        [razorpay_order_id]
-      );
-      
-      if (!txn.length) {
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
 
-        return;
+        // Get transaction with a row-level lock
+        const [txn] = await conn.query(
+          'SELECT * FROM transactions WHERE razorpay_order_id = ? FOR UPDATE',
+          [razorpay_order_id]
+        );
+        
+        if (!txn.length) {
+          await conn.rollback();
+          conn.release();
+          return;
+        }
+        
+        // If already processed, skip
+        if (txn[0].status === 'success') {
+          await conn.rollback();
+          conn.release();
+          return;
+        }
+        
+        const loan_id = txn[0].loan_id;
+        const userId = txn[0].user_id;
+        
+        // Update transaction
+        await conn.query(
+          `UPDATE transactions SET
+            razorpay_payment_id = ?,
+            razorpay_signature = ?,
+            status = 'success'
+           WHERE razorpay_order_id = ?`,
+          [razorpay_payment_id, razorpay_signature, razorpay_order_id]
+        );
+        
+        // Update loan amount_paid
+        await conn.query(
+          `UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?`,
+          [amount, loan_id]
+        );
+        
+        // Mark EMI as paid
+        await conn.query(
+          `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
+           WHERE loan_id = ? AND status = 'upcoming' ORDER BY due_date ASC LIMIT 1`,
+          [amount, loan_id]
+        );
+        
+        // Check if loan fully paid
+        const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
+        if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+          await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
+        }
+        
+        // Notification
+        await conn.query(
+          'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+          [userId, 'Payment Successful (Webhook) ✅', `Your EMI payment of ₹${amount} has been received. Payment ID: ${razorpay_payment_id}`, 'payment']
+        );
+        
+        await conn.commit();
+        conn.release();
+      } catch (dbErr) {
+        try {
+          await conn.rollback();
+        } catch (_) {}
+        conn.release();
+        throw dbErr;
       }
-      
-      // If already processed, skip
-      if (txn[0].status === 'success') {
-
-        return;
-      }
-      
-      const loan_id = txn[0].loan_id;
-      const userId = txn[0].user_id;
-      
-      // Update transaction
-      await pool.query(
-        `UPDATE transactions SET
-          razorpay_payment_id = ?,
-          razorpay_signature = ?,
-          status = 'success'
-         WHERE razorpay_order_id = ?`,
-        [razorpay_payment_id, razorpay_signature, razorpay_order_id]
-      );
-      
-      // Update loan amount_paid
-      await pool.query(
-        `UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?`,
-        [amount, loan_id]
-      );
-      
-      // Mark EMI as paid
-      await pool.query(
-        `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
-         WHERE loan_id = ? AND status = 'upcoming' ORDER BY due_date ASC LIMIT 1`,
-        [amount, loan_id]
-      );
-      
-      // Check if loan fully paid
-      const [loan] = await pool.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
-      if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
-        await pool.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
-      }
-      
-      // Notification
-      await pool.query(
-        'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-        [userId, 'Payment Successful (Webhook) ✅', `Your EMI payment of ₹${amount} has been received. Payment ID: ${razorpay_payment_id}`, 'payment']
-      );
-      
-
     }
   } catch (err) {
     console.error('❌ Webhook error:', err.message);

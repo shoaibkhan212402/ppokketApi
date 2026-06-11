@@ -8,24 +8,30 @@ const uploadKYC = async (req, res) => {
   const path = require('path');
   const logPath = path.join(__dirname, '../errors.log');
 
+  const writeLog = (msg) => {
+    console.log(msg);
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        fs.appendFileSync(logPath, msg + '\n');
+      } catch (_) {}
+    }
+  };
+
   try {
     const userId = req.user.id;
     const files = req.files;
 
-    fs.appendFileSync(
-      logPath,
-      `[${new Date().toISOString()}] [uploadKYC] Called for user ${userId}. Content-Type: ${req.headers['content-type'] || 'unknown'}. Body keys: ${Object.keys(req.body || {}).join(', ')}. Files keys: ${Object.keys(files || {}).join(', ')}\n`
-    );
+    writeLog(`[${new Date().toISOString()}] [uploadKYC] Called for user ${userId}. Content-Type: ${req.headers['content-type'] || 'unknown'}. Body keys: ${Object.keys(req.body || {}).join(', ')}. Files keys: ${Object.keys(files || {}).join(', ')}`);
 
     // Log detailed file info for diagnostics
     try {
       for (const field of Object.keys(files || {})) {
         for (const f of files[field]) {
-          fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] File - field: ${field}, originalname: ${f.originalname || ''}, filename: ${f.filename || ''}, mimetype: ${f.mimetype || ''}, size: ${f.size || 0}, path: ${f.path || ''}\n`);
+          writeLog(`[${new Date().toISOString()}] [uploadKYC] File - field: ${field}, originalname: ${f.originalname || ''}, filename: ${f.filename || ''}, mimetype: ${f.mimetype || ''}, size: ${f.size || 0}, path: ${f.path || ''}`);
         }
       }
     } catch (logErr) {
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] File logging failed: ${logErr.message}\n`);
+      writeLog(`[${new Date().toISOString()}] [uploadKYC] File logging failed: ${logErr.message}`);
     }
 
     // Basic server-side validation: mimetype and size
@@ -61,14 +67,14 @@ const uploadKYC = async (req, res) => {
           }
         }
       } catch (cleanupErr) {
-        fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] Cleanup failed: ${cleanupErr.message}\n`);
+        writeLog(`[${new Date().toISOString()}] [uploadKYC] Cleanup failed: ${cleanupErr.message}`);
       }
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] Validation errors: ${errors.join('; ')}\n`);
+      writeLog(`[${new Date().toISOString()}] [uploadKYC] Validation errors: ${errors.join('; ')}`);
       return res.status(400).json({ success: false, message: 'Invalid uploads', errors });
     }
 
     if (!files || Object.keys(files).length === 0) {
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] No files uploaded. req.files is empty.\n`);
+      writeLog(`[${new Date().toISOString()}] [uploadKYC] No files uploaded. req.files is empty.`);
       return res.status(400).json({ success: false, message: 'No files uploaded' });
     }
 
@@ -103,10 +109,7 @@ const uploadKYC = async (req, res) => {
       bank_passbook: getFileUrl(files.bank_passbook),
     };
 
-    fs.appendFileSync(
-      logPath,
-      `[${new Date().toISOString()}] [uploadKYC] Resolved urls: ${JSON.stringify(urls)}\n`
-    );
+    writeLog(`[${new Date().toISOString()}] [uploadKYC] Resolved urls: ${JSON.stringify(urls)}`);
 
     try {
       await pool.query(
@@ -122,9 +125,9 @@ const uploadKYC = async (req, res) => {
            updated_at    = NOW()`,
         [userId, urls.aadhaar_front || null, urls.aadhaar_back || null, urls.pan_card || null, urls.selfie || null, urls.bank_passbook || null]
       );
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] Saved documents to DB successfully.\n`);
+      writeLog(`[${new Date().toISOString()}] [uploadKYC] Saved documents to DB successfully.`);
     } catch (dbErr) {
-      fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] Database insert failed: ${dbErr.message}\nStack: ${dbErr.stack}\n`);
+      writeLog(`[${new Date().toISOString()}] [uploadKYC] Database insert failed: ${dbErr.message}\nStack: ${dbErr.stack}`);
       throw dbErr;
     }
 
@@ -140,7 +143,7 @@ const uploadKYC = async (req, res) => {
     await delCache('admin:dashboard');
   } catch (err) {
     console.error('[uploadKYC]', err);
-    fs.appendFileSync(logPath, `[${new Date().toISOString()}] [uploadKYC] Outer catch error: ${err.message}\nStack: ${err.stack}\n`);
+    writeLog(`[${new Date().toISOString()}] [uploadKYC] Outer catch error: ${err.message}\nStack: ${err.stack}`);
     res.status(500).json({ success: false, message: err.message });
   }
 };

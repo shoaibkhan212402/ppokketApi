@@ -73,16 +73,18 @@ app.use((req, res) => res.status(404).json({ success: false, message: 'Route not
 app.use((err, req, res, next) => {
   console.error('❌ Error:', err.stack);
   
-  // Log to local file for easier debugging
-  try {
-    const fs = require('fs');
-    const logPath = path.join(__dirname, 'errors.log');
-    fs.appendFileSync(
-      logPath,
-      `[${new Date().toISOString()}] ${req.method} ${req.url} - Error: ${err.message}\nStack: ${err.stack}\n\n`
-    );
-  } catch (logErr) {
-    console.error('Failed to write to error log file:', logErr.message);
+  // Log to local file for easier debugging ONLY in development
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const fs = require('fs');
+      const logPath = path.join(__dirname, 'errors.log');
+      fs.appendFileSync(
+        logPath,
+        `[${new Date().toISOString()}] ${req.method} ${req.url} - Error: ${err.message}\nStack: ${err.stack}\n\n`
+      );
+    } catch (logErr) {
+      console.error('Failed to write to error log file:', logErr.message);
+    }
   }
 
   res.status(err.status || 500).json({
