@@ -22,16 +22,26 @@ const run = async () => {
     port: DB_PORT,
     user: DB_USER,
     password: DB_PASSWORD,
+    database: DB_NAME, // Connect directly to selected database
     multipleStatements: true,
   });
 
   try {
-    await connection.query(`DROP DATABASE IF EXISTS \`${DB_NAME}\`;`);
-    console.log('✅ Dropped database if it existed.');
-
-    await connection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;`);
-    await connection.query(`USE \`${DB_NAME}\`;`);
-    console.log('✅ Created and selected database.');
+    // Drop all existing tables in the database (since DROP DATABASE/CREATE DATABASE is blocked on Hostinger)
+    const [tables] = await connection.query('SHOW TABLES');
+    if (tables.length > 0) {
+      console.log('🧹 Found existing tables. Dropping all tables...');
+      await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+      for (const row of tables) {
+        const tableName = Object.values(row)[0];
+        await connection.query(`DROP TABLE IF EXISTS \`${tableName}\``);
+        console.log(`  🗑️ Dropped table: ${tableName}`);
+      }
+      await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+      console.log('✅ Dropped all existing tables.');
+    } else {
+      console.log('✅ Database is already empty.');
+    }
 
     const schemaPath = path.join(__dirname, 'schema.sql');
     let schemaSql = fs.readFileSync(schemaPath, 'utf8');

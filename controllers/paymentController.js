@@ -1,11 +1,7 @@
-const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const axios = require('axios');
 const { pool } = require('../config/db');
-
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+const { sendNotification } = require('../utils/fcm');
 
 // POST /api/payment/create-order
 const createOrder = async (req, res) => {
@@ -27,42 +23,68 @@ const createOrder = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Loan not found or not disbursed' });
     }
 
-    const options = {
-      amount: Math.round(amountVal * 100), // paise
-      currency: 'INR',
-      receipt: `loan_${loan_id}_${Date.now()}`,
-      notes: { loan_id, user_id: userId },
-    };
+    const [userRow] = await pool.query('SELECT full_name, mobile, email FROM users WHERE id = ?', [userId]);
+    const user = userRow[0] || {};
 
-    let order;
-    try {
-      if (process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.includes('placeholder')) {
-        order = await razorpay.orders.create(options);
-      } else {
-        throw new Error('Placeholder keys: using simulated Razorpay order');
+    let orderId = `order_${loan_id}_${Date.now()}`;
+    let paymentSessionId = null;
+    let cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
+    let isMock = true;
+
+    if (process.env.CASHFREE_APP_ID && !process.env.CASHFREE_APP_ID.includes('placeholder')) {
+      const url = cfEnv === 'production' ? 'https://api.cashfree.com/pg/orders' : 'https://sandbox.cashfree.com/pg/orders';
+      try {
+        const response = await axios.post(url, {
+          order_id: orderId,
+          order_amount: parseFloat(amountVal),
+          order_currency: 'INR',
+          customer_details: {
+            customer_id: String(userId),
+            customer_email: user.email || 'customer@ppokket.com',
+            customer_phone: user.mobile ? user.mobile.replace(/\D/g, '').slice(-10) : '9999999999',
+            customer_name: user.full_name || 'Customer'
+          },
+          order_meta: {
+            return_url: `${req.headers.origin || 'http://localhost:5173'}/profile?tab=Payments`
+          }
+        }, {
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': '2023-08-01',
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.data && response.data.payment_session_id) {
+          paymentSessionId = response.data.payment_session_id;
+          orderId = response.data.order_id;
+          isMock = false;
+        }
+      } catch (err) {
+        console.warn('Cashfree PG order creation failed, falling back to mock:', err.response?.data || err.message);
       }
-    } catch (e) {
+    }
 
-      order = {
-        id: `order_mock_${crypto.randomBytes(8).toString('hex')}`,
-        amount: Math.round(amountVal * 100),
-        currency: 'INR',
-      };
+    if (isMock) {
+      orderId = `order_mock_${crypto.randomBytes(8).toString('hex')}`;
     }
 
     // Save pending transaction
     await pool.query(
       `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, amount, type, status, description)
        VALUES (?, ?, ?, ?, 'emi', 'pending', ?)`,
-      [userId, loan_id, order.id, amountVal, `EMI payment for loan #${loan_id}`]
+      [userId, loan_id, orderId, amountVal, `EMI payment for loan #${loan_id}`]
     );
 
     res.json({
       success: true,
-      order_id: order.id,
-      amount: order.amount,
-      currency: order.currency,
-      key: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholderkey',
+      order_id: orderId,
+      payment_session_id: paymentSessionId,
+      amount: amountVal,
+      currency: 'INR',
+      cashfree_env: cfEnv,
+      is_mock: isMock
     });
   } catch (err) {
     console.error('[createOrder]', err);
@@ -74,21 +96,42 @@ const createOrder = async (req, res) => {
 const verifyPayment = async (req, res) => {
   const conn = await pool.getConnection();
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, loan_id } = req.body;
+    const { razorpay_order_id, loan_id } = req.body;
+    const orderId = razorpay_order_id;
     const userId = req.user.id;
 
-    // Verify signature (skip check if it's a mock order)
-    if (!razorpay_order_id.startsWith('order_mock')) {
-      const body = razorpay_order_id + '|' + razorpay_payment_id;
-      const expectedSignature = crypto
-        .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET || 'placeholdersecret')
-        .update(body)
-        .digest('hex');
+    let isMock = orderId.startsWith('order_mock');
+    let paymentId = isMock ? `pay_mock_${Date.now()}` : '';
+    let isPaid = false;
 
-      if (expectedSignature !== razorpay_signature) {
-        conn.release();
-        return res.status(400).json({ success: false, message: 'Payment verification failed' });
+    if (isMock) {
+      isPaid = true;
+    } else {
+      const cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
+      const url = cfEnv === 'production'
+        ? `https://api.cashfree.com/pg/orders/${orderId}`
+        : `https://sandbox.cashfree.com/pg/orders/${orderId}`;
+
+      try {
+        const response = await axios.get(url, {
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': '2023-08-01'
+          }
+        });
+        if (response.data && response.data.order_status === 'PAID') {
+          isPaid = true;
+          paymentId = response.data.cf_order_id || `cf_${orderId}`;
+        }
+      } catch (err) {
+        console.error('Cashfree order verify failed:', err.response?.data || err.message);
       }
+    }
+
+    if (!isPaid) {
+      conn.release();
+      return res.status(400).json({ success: false, message: 'Payment verification failed: Order not paid' });
     }
 
     await conn.beginTransaction();
@@ -96,7 +139,7 @@ const verifyPayment = async (req, res) => {
     // Get transaction with a row-level lock
     const [txn] = await conn.query(
       'SELECT * FROM transactions WHERE razorpay_order_id = ? AND user_id = ? FOR UPDATE',
-      [razorpay_order_id, userId]
+      [orderId, userId]
     );
 
     if (!txn.length) {
@@ -105,14 +148,14 @@ const verifyPayment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Transaction not found' });
     }
 
-    // Skip processing if already marked success to prevent double credit / double EMIs paid
+    // Skip processing if already marked success
     if (txn[0].status === 'success') {
       await conn.commit();
       conn.release();
       return res.json({
         success: true,
         message: 'Payment already processed successfully',
-        payment_id: txn[0].razorpay_payment_id || razorpay_payment_id,
+        payment_id: txn[0].razorpay_payment_id || paymentId,
       });
     }
 
@@ -120,10 +163,9 @@ const verifyPayment = async (req, res) => {
     await conn.query(
       `UPDATE transactions SET
         razorpay_payment_id = ?,
-        razorpay_signature = ?,
         status = 'success'
        WHERE razorpay_order_id = ?`,
-      [razorpay_payment_id, razorpay_signature, razorpay_order_id]
+      [paymentId, orderId]
     );
 
     // Update loan amount_paid
@@ -136,7 +178,7 @@ const verifyPayment = async (req, res) => {
     // Mark EMI as paid
     await conn.query(
       `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
-       WHERE loan_id = ? AND status = 'upcoming' ORDER BY due_date ASC LIMIT 1`,
+       WHERE loan_id = ? AND status IN ('upcoming', 'overdue') ORDER BY due_date ASC LIMIT 1`,
       [paidAmount, loan_id]
     );
 
@@ -149,21 +191,26 @@ const verifyPayment = async (req, res) => {
     // Notification
     await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [userId, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received. Payment ID: ${razorpay_payment_id}`, 'payment']
+      [userId, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received. Payment ID: ${paymentId}`, 'payment']
     );
 
     await conn.commit();
     conn.release();
 
+    const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]);
+    if (user[0]?.fcm_token) {
+      sendNotification(user[0].fcm_token, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received.`, { screen: 'Loans' }).catch(() => {});
+    }
+
     res.json({
       success: true,
       message: 'Payment verified successfully',
-      payment_id: razorpay_payment_id,
+      payment_id: paymentId,
     });
   } catch (err) {
     try {
       await conn.rollback();
-    } catch (_) {}
+    } catch (_) { }
     conn.release();
     console.error('[verifyPayment]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -192,21 +239,21 @@ const handleWebhook = async (req, res) => {
   try {
     const signature = req.headers['x-razorpay-signature'];
     const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'ppokket_webhook_secret_123';
-    
-    // Validate signature
+
+    // Validate signature using raw body (Razorpay signs the raw request body)
     const shasum = crypto.createHmac('sha256', webhookSecret);
-    shasum.update(JSON.stringify(req.body));
+    shasum.update(req.rawBody || JSON.stringify(req.body));
     const digest = shasum.digest('hex');
-    
+
     if (digest !== signature) {
       return res.status(400).json({ success: false, message: 'Invalid webhook signature' });
     }
-    
+
     // Acknowledge receipt immediately to Razorpay
     res.json({ status: 'ok' });
-    
+
     const event = req.body.event;
-    
+
     if (event === 'order.paid') {
       const paymentEntity = req.body.payload?.payment?.entity;
       if (!paymentEntity) return;
@@ -215,7 +262,7 @@ const handleWebhook = async (req, res) => {
       const razorpay_payment_id = paymentEntity.id;
       const razorpay_signature = signature;
       const amount = paymentEntity.amount / 100; // paise to rupees
-      
+
       const conn = await pool.getConnection();
       try {
         await conn.beginTransaction();
@@ -225,23 +272,23 @@ const handleWebhook = async (req, res) => {
           'SELECT * FROM transactions WHERE razorpay_order_id = ? FOR UPDATE',
           [razorpay_order_id]
         );
-        
+
         if (!txn.length) {
           await conn.rollback();
           conn.release();
           return;
         }
-        
+
         // If already processed, skip
         if (txn[0].status === 'success') {
           await conn.rollback();
           conn.release();
           return;
         }
-        
+
         const loan_id = txn[0].loan_id;
         const userId = txn[0].user_id;
-        
+
         // Update transaction
         await conn.query(
           `UPDATE transactions SET
@@ -251,38 +298,38 @@ const handleWebhook = async (req, res) => {
            WHERE razorpay_order_id = ?`,
           [razorpay_payment_id, razorpay_signature, razorpay_order_id]
         );
-        
+
         // Update loan amount_paid
         await conn.query(
           `UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?`,
           [amount, loan_id]
         );
-        
+
         // Mark EMI as paid
         await conn.query(
           `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
            WHERE loan_id = ? AND status = 'upcoming' ORDER BY due_date ASC LIMIT 1`,
           [amount, loan_id]
         );
-        
+
         // Check if loan fully paid
         const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
         if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
           await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
         }
-        
+
         // Notification
         await conn.query(
           'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
           [userId, 'Payment Successful (Webhook) ✅', `Your EMI payment of ₹${amount} has been received. Payment ID: ${razorpay_payment_id}`, 'payment']
         );
-        
+
         await conn.commit();
         conn.release();
       } catch (dbErr) {
         try {
           await conn.rollback();
-        } catch (_) {}
+        } catch (_) { }
         conn.release();
         throw dbErr;
       }
@@ -295,5 +342,121 @@ const handleWebhook = async (req, res) => {
   }
 };
 
-module.exports = { createOrder, verifyPayment, getPaymentHistory, handleWebhook };
+// POST /api/payment/refund  (admin only)
+const initiateRefund = async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { transaction_id, reason } = req.body;
+    if (!transaction_id) {
+      conn.release();
+      return res.status(400).json({ success: false, message: 'transaction_id required' });
+    }
+
+    const [txn] = await conn.query('SELECT * FROM transactions WHERE id = ? FOR UPDATE', [transaction_id]);
+    if (!txn.length) {
+      conn.release();
+      return res.status(404).json({ success: false, message: 'Transaction not found' });
+    }
+    if (txn[0].status !== 'success') {
+      conn.release();
+      return res.status(400).json({ success: false, message: 'Only successful transactions can be refunded' });
+    }
+    if (txn[0].type === 'refund') {
+      conn.release();
+      return res.status(400).json({ success: false, message: 'Transaction is already a refund' });
+    }
+
+    const orderId = txn[0].razorpay_order_id;
+    const payment_id = txn[0].razorpay_payment_id;
+    const refundAmount = txn[0].amount;
+
+    let refund;
+    const isMock = orderId.startsWith('order_mock') || (payment_id && payment_id.startsWith('pay_mock'));
+
+    if (!isMock && process.env.CASHFREE_APP_ID && !process.env.CASHFREE_APP_ID.includes('placeholder')) {
+      const cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
+      const url = cfEnv === 'production'
+        ? `https://api.cashfree.com/pg/orders/${orderId}/refunds`
+        : `https://sandbox.cashfree.com/pg/orders/${orderId}/refunds`;
+
+      const refundId = `ref_${orderId.replace('order_', '')}_${Date.now()}`;
+      try {
+        const response = await axios.post(url, {
+          refund_amount: parseFloat(refundAmount),
+          refund_id: refundId,
+          refund_note: reason || 'Admin initiated refund',
+          refund_speed: 'STANDARD'
+        }, {
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': '2023-08-01',
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.data && response.data.refund_id) {
+          refund = { id: response.data.refund_id };
+        } else {
+          throw new Error('Invalid refund response from Cashfree');
+        }
+      } catch (err) {
+        console.error('Cashfree PG refund failed:', err.response?.data || err.message);
+        conn.release();
+        return res.status(500).json({
+          success: false,
+          message: `Cashfree refund failed: ${err.response?.data?.message || err.message}`
+        });
+      }
+    } else {
+      refund = { id: `rfnd_mock_${crypto.randomBytes(6).toString('hex')}` };
+    }
+
+    await conn.beginTransaction();
+
+    await conn.query(
+      `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, razorpay_payment_id, amount, type, status, description)
+       VALUES (?, ?, ?, ?, ?, 'refund', 'success', ?)`,
+      [txn[0].user_id, txn[0].loan_id, txn[0].razorpay_order_id, refund.id, refundAmount,
+      `Refund for payment ${payment_id} — ${reason || 'Admin refund'}`]
+    );
+
+    // Reverse EMI mark if applicable
+    if (txn[0].type === 'emi' && txn[0].loan_id) {
+      await conn.query(
+        `UPDATE emi_schedule SET status = 'upcoming', paid_amount = 0, paid_at = NULL
+         WHERE loan_id = ? AND status = 'paid' ORDER BY due_date DESC LIMIT 1`,
+        [txn[0].loan_id]
+      );
+      await conn.query(
+        `UPDATE loans SET amount_paid = GREATEST(0, amount_paid - ?), status = 'disbursed'
+         WHERE id = ? AND status = 'closed'`,
+        [refundAmount, txn[0].loan_id]
+      );
+      await conn.query(
+        `UPDATE loans SET amount_paid = GREATEST(0, amount_paid - ?) WHERE id = ? AND status != 'closed'`,
+        [refundAmount, txn[0].loan_id]
+      );
+    }
+
+    await conn.query(
+      'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+      [txn[0].user_id, 'Refund Initiated 💸',
+      `A refund of ₹${refundAmount} has been initiated. Refund ID: ${refund.id}. It will reflect in 5–7 business days.`,
+        'payment']
+    );
+
+    await conn.commit();
+    conn.release();
+
+    res.json({ success: true, message: 'Refund initiated successfully', refund_id: refund.id, amount: refundAmount });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) { }
+    conn.release();
+    console.error('[initiateRefund]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { createOrder, verifyPayment, getPaymentHistory, handleWebhook, initiateRefund };
 

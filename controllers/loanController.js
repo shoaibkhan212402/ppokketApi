@@ -28,28 +28,67 @@ const applyLoan = async (req, res) => {
       return res.status(400).json({ success: false, message: 'You already have an active loan application' });
     }
 
-    // Check credit limit & fetch user custom interest rate
-    const [userRows] = await pool.query('SELECT credit_limit, interest_rate FROM users WHERE id = ?', [userId]);
+    // Check credit limit & withdrawal limit; fetch user custom interest rate and terms
+    const [userRows] = await pool.query(
+      'SELECT credit_limit, withdrawal_limit, interest_rate, custom_processing_fee_pct, custom_first_emi_pct FROM users WHERE id = ?',
+      [userId]
+    );
     if (!userRows.length) return res.status(404).json({ success: false, message: 'User not found' });
     const user = userRows[0];
     const creditLimit = Number(user.credit_limit) || 0;
+    // effective cap = min(credit_limit, withdrawal_limit) — withdrawal_limit NULL means no extra cap
+    const withdrawalLimit = user.withdrawal_limit !== null ? Number(user.withdrawal_limit) : creditLimit;
+    const effectiveLimit  = Math.min(creditLimit, withdrawalLimit);
 
     if (creditLimit <= 0) {
       return res.status(400).json({ success: false, message: 'Your credit limit has not been assigned yet. Please wait for admin review.' });
     }
-    if (amount > creditLimit) {
-      return res.status(400).json({ success: false, message: `Loan amount exceeds your credit limit of ₹${creditLimit}` });
+    if (amount > effectiveLimit) {
+      const msg = withdrawalLimit < creditLimit
+        ? `Loan amount exceeds your withdrawal limit of ₹${effectiveLimit} (credit limit: ₹${creditLimit})`
+        : `Loan amount exceeds your credit limit of ₹${creditLimit}`;
+      return res.status(400).json({ success: false, message: msg });
+    }
+
+    // Load system settings
+    const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
+    const settings = {};
+    for (const r of settingsRows) {
+      const v = r.setting_value;
+      settings[r.setting_key] = v === 'true' ? true : v === 'false' ? false : (!isNaN(v) && v !== '') ? Number(v) : v;
     }
 
     const interest_rate = parseFloat(user.interest_rate) || 2.50; // Use admin-assigned ROI
-    const processing_fee = Math.round(amount * 0.02); // 2%
+    
+    // Resolve user's custom processing fee % or fallback to global settings
+    const userFeePct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : null;
+    const feePct = userFeePct ?? parseFloat(settings.processing_fee_pct) ?? 2;
+    const processing_fee = Math.round(amount * feePct / 100);
+
     const emi_amount = calculateEMI(amount, interest_rate, duration_months);
-    const total_payable = emi_amount * duration_months;
+
+    // Resolve user's custom first EMI collection % or fallback to global settings
+    const userFirstEmiPct = user.custom_first_emi_pct != null ? parseFloat(user.custom_first_emi_pct) : null;
+    const resolvedFirstEmiPct = userFirstEmiPct ?? parseFloat(settings.first_emi_principal_pct) ?? 0;
+
+    const mergedSettings = {
+      ...settings,
+      first_emi_principal_pct: resolvedFirstEmiPct
+    };
+
+    // Generate schedule to resolve true total payable based on custom user settings
+    const schedule = generateEMISchedule(
+      { amount, interest_rate, duration_months, emi_amount, processing_fee },
+      null,
+      mergedSettings
+    );
+
+    const total_payable = schedule.reduce((sum, r) => sum + parseFloat(r.emi_amount), 0);
 
     const [result] = await pool.query(
-      `INSERT INTO loans (user_id, amount, interest_rate, duration_months, emi_amount, processing_fee, total_payable, purpose, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
-      [userId, amount, interest_rate, duration_months, emi_amount, processing_fee, total_payable, purpose || null]
+      `INSERT INTO loans (user_id, amount, interest_rate, duration_months, emi_amount, processing_fee, processing_fee_pct, first_emi_pct, processing_fee_in_first_emi, total_payable, purpose, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+      [userId, amount, interest_rate, duration_months, emi_amount, processing_fee, feePct, resolvedFirstEmiPct, settings.processing_fee_in_first_emi ? 1 : 0, total_payable, purpose || null]
     );
 
     const loanId = result.insertId;
@@ -70,13 +109,16 @@ const applyLoan = async (req, res) => {
         duration_months,
         emi_amount,
         processing_fee,
+        processing_fee_pct: feePct,
+        first_emi_pct: resolvedFirstEmiPct,
+        processing_fee_in_first_emi: settings.processing_fee_in_first_emi ? 1 : 0,
         total_payable,
         status: 'pending',
       }
     });
     // Invalidate caches
     await invalidateUserCache(userId);
-    await delCache('admin:dashboard');
+    await delCache('admin:dashboard', 'admin:dashboard:partner:*');
   } catch (err) {
     console.error('[applyLoan]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -132,11 +174,74 @@ const getLoanDetails = async (req, res) => {
 const emiCalculator = async (req, res) => {
   try {
     const { amount, duration_months, interest_rate } = req.query;
-    const rateVal = parseFloat(interest_rate) || 2.5;
-    const emi = calculateEMI(parseFloat(amount), rateVal, parseInt(duration_months));
-    const total_payable = emi * parseInt(duration_months);
-    const total_interest = total_payable - parseFloat(amount);
-    const processing_fee = Math.round(amount * 0.02);
+    const userId  = req.user?.id;
+
+    // Load system settings
+    const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
+    const settings = {};
+    for (const r of settingsRows) {
+      const v = r.setting_value;
+      settings[r.setting_key] = v === 'true' ? true : v === 'false' ? false : (!isNaN(v) && v !== '') ? Number(v) : v;
+    }
+
+    // Resolve user custom settings if user is logged in
+    let rateVal = parseFloat(interest_rate);
+    let userFeePct = null;
+    let userFirstEmiPct = null;
+    let effective_limit = null;
+
+    if (userId) {
+      const [rows] = await pool.query(
+        'SELECT credit_limit, withdrawal_limit, interest_rate, custom_processing_fee_pct, custom_first_emi_pct FROM users WHERE id = ?',
+        [userId]
+      );
+      if (rows.length) {
+        const u = rows[0];
+        const cl = Number(u.credit_limit) || 0;
+        const wl = u.withdrawal_limit !== null ? Number(u.withdrawal_limit) : cl;
+        effective_limit = Math.min(cl, wl);
+        
+        if (isNaN(rateVal)) {
+          rateVal = parseFloat(u.interest_rate);
+        }
+        
+        if (u.custom_processing_fee_pct != null) {
+          userFeePct = parseFloat(u.custom_processing_fee_pct);
+        }
+        if (u.custom_first_emi_pct != null) {
+          userFirstEmiPct = parseFloat(u.custom_first_emi_pct);
+        }
+      }
+    }
+
+    if (isNaN(rateVal)) rateVal = 2.5;
+
+    const principal = parseFloat(amount) || 10000;
+    const months = parseInt(duration_months) || 6;
+
+    // Resolve processing fee (user's custom or global setting)
+    const feePct = userFeePct ?? parseFloat(settings.processing_fee_pct) ?? 2;
+    const processing_fee = Math.round(principal * feePct / 100);
+
+    const emi = calculateEMI(principal, rateVal, months);
+
+    // Resolve first EMI principal pct (user's custom or global setting)
+    const resolvedFirstEmiPct = userFirstEmiPct ?? parseFloat(settings.first_emi_principal_pct) ?? 0;
+    
+    const mergedSettings = {
+      ...settings,
+      first_emi_principal_pct: resolvedFirstEmiPct
+    };
+
+    // Generate schedule
+    const schedule = generateEMISchedule(
+      { amount: principal, interest_rate: rateVal, duration_months: months, emi_amount: emi, processing_fee },
+      null,
+      mergedSettings
+    );
+
+    const total_payable = schedule.reduce((sum, r) => sum + parseFloat(r.emi_amount), 0);
+    const total_interest = total_payable - principal - (settings.processing_fee_in_first_emi ? 0 : processing_fee);
 
     res.json({
       success: true,
@@ -144,7 +249,10 @@ const emiCalculator = async (req, res) => {
       total_payable: Math.round(total_payable),
       total_interest: Math.round(total_interest),
       processing_fee,
+      processing_fee_pct: feePct,
       interest_rate: rateVal,
+      effective_limit,
+      schedule,
     });
   } catch (err) {
     console.error('[emiCalculator]', err);

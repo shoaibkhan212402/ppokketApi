@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const { connectDB } = require('./config/db');
 const { connectRedis } = require('./config/redis');
+const { registerJobs } = require('./utils/scheduledJobs');
 
 // Routes
 const authRoutes         = require('./routes/authRoutes');
@@ -19,6 +20,8 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const adminRoutes        = require('./routes/adminRoutes');
 const cibilRoutes        = require('./routes/cibilRoutes');
 const aadhaarRoutes      = require('./routes/aadhaarRoutes');
+const referralRoutes     = require('./routes/referralRoutes');
+const dsaRoutes          = require('./routes/dsaRoutes');
 
 const app = express();
 
@@ -44,8 +47,15 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Body parsing
-app.use(express.json({ limit: '10mb' }));
+// Body parsing — capture raw body for Razorpay webhook signature verification
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf, encoding) => {
+    if (req.originalUrl === '/api/payment/webhook') {
+      req.rawBody = buf.toString(encoding || 'utf8');
+    }
+  },
+}));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('dev'));
 
@@ -65,6 +75,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin',         adminRoutes);
 app.use('/api/cibil',         cibilRoutes);
 app.use('/api/aadhaar',       aadhaarRoutes);
+app.use('/api/referral',      referralRoutes);
+app.use('/api/dsa',           dsaRoutes);
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
@@ -95,10 +107,33 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-connectDB().then(async () => {
-  await connectRedis();
-  app.listen(PORT, () => {
+// Don't expose internal error details in production
+app.use((err, req, res, _next) => {
+  const isProd = process.env.NODE_ENV === 'production';
+  console.error('❌ Unhandled error:', err.stack);
+  res.status(err.status || 500).json({
+    success: false,
+    message: isProd ? 'Internal Server Error' : (err.message || 'Internal Server Error'),
+  });
+});
 
+connectDB().then(async (dbConnected) => {
+  if (dbConnected) {
+    try {
+      const { initCibilTable } = require('./controllers/cibilController');
+      await initCibilTable();
+      console.log('✅ CIBIL table check completed');
+    } catch (cibilErr) {
+      console.error('❌ Failed to run CIBIL table initialization:', cibilErr);
+    }
+  } else {
+    console.warn('⚠️ Deferring CIBIL table initialization due to database connection failure.');
+  }
+
+  await connectRedis();
+  registerJobs();
+  app.listen(PORT, () => {
+    console.log(`✅ Ppokket API running on port ${PORT}`);
   });
 });
 

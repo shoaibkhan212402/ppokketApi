@@ -8,9 +8,12 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'ppokket_db',
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 25,
   queueLimit: 0,
   timezone: '+05:30',
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  connectTimeout: 5000,
 });
 
 const connectDB = async () => {
@@ -21,12 +24,14 @@ const connectDB = async () => {
 
   try {
     const conn = await pool.getConnection();
-
+    console.log(`✅ MySQL Database Connected successfully to ${user}@${host}:${port}/${database}`);
     conn.release();
+    return true;
   } catch (err) {
     console.error('❌ MySQL Connection Error details:', err);
     console.error('❌ MySQL Connection Error message:', err.message || err);
-    process.exit(1);
+    console.warn('⚠️ Server will run but database operations will fail until connection is restored.');
+    return false;
   }
 };
 

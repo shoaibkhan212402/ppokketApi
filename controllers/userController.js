@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
+const { sendNotification } = require('../utils/fcm');
 
 // GET /api/user/profile
 const getProfile = async (req, res) => {
@@ -40,7 +41,44 @@ const getProfile = async (req, res) => {
 // PUT /api/user/update
 const updateProfile = async (req, res) => {
   try {
-    const { full_name, email, pan_number, aadhaar_number, date_of_birth, occupation, monthly_income, fcm_token, dark_mode, language } = req.body;
+    const { full_name, email, pan_number, aadhaar_number, date_of_birth, occupation, monthly_income, fcm_token, dark_mode, language, referral_code } = req.body;
+    
+    // Process referral code if provided and user does not already have a referrer
+    if (referral_code) {
+      const [currentUserRow] = await pool.query('SELECT referred_by FROM users WHERE id = ?', [req.user.id]);
+      if (currentUserRow.length && currentUserRow[0].referred_by === null) {
+        // Resolve referrer
+        const [refRows] = await pool.query(
+          'SELECT id, fcm_token FROM users WHERE referral_code = ?',
+          [referral_code.trim().toUpperCase()]
+        );
+        if (refRows.length) {
+          const referrerId = refRows[0].id;
+          const referrerFcmToken = refRows[0].fcm_token;
+          if (referrerId !== req.user.id) {
+            // Update referred_by
+            await pool.query('UPDATE users SET referred_by = ? WHERE id = ?', [referrerId, req.user.id]);
+            // Create referral record
+            await pool.query(
+              'INSERT IGNORE INTO referrals (referrer_id, referred_id) VALUES (?, ?)',
+              [referrerId, req.user.id]
+            );
+            // In-app notification for referrer
+            const title = '👥 New Referral!';
+            const message = `${full_name || 'A new user'} joined Ppokket using your referral code. You will earn a credit limit bonus once they complete KYC.`;
+            await pool.query(
+              'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+              [referrerId, title, message, 'promo']
+            );
+            // Push notification for referrer
+            if (referrerFcmToken) {
+              await sendNotification(referrerFcmToken, title, message, { screen: 'Referrals' });
+            }
+          }
+        }
+      }
+    }
+
     await pool.query(
       `UPDATE users SET
         full_name = COALESCE(?, full_name),
@@ -84,6 +122,7 @@ const updateBankDetails = async (req, res) => {
          updated_at = NOW()`,
       [req.user.id, account_holder, account_number, ifsc_code, bank_name, account_type || 'savings']
     );
+    await invalidateUserCache(req.user.id);
     res.json({ success: true, message: 'Bank details saved' });
   } catch (err) {
     console.error('[updateBankDetails]', err);
@@ -272,6 +311,8 @@ const checkEligibility = async (req, res) => {
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [userId, 'Credit Score Updated 📊', `Your estimated credit score is ${score}. Your credit limit will be assigned by our team after KYC review.`, 'system']
     );
+
+    await invalidateUserCache(userId);
 
     res.json({
       success: true,

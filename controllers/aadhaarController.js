@@ -48,6 +48,8 @@ const sendOTP = async (req, res) => {
       [cleanAadhaar, result.referenceId, userId]
     );
 
+    await invalidateUserCache(userId);
+
     return res.json({
       success: true,
       referenceId: result.referenceId,

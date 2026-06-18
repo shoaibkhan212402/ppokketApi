@@ -75,11 +75,12 @@ const delCache = async (...keys) => {
  */
 const invalidateUserCache = async (userId) => {
   await delCache(
+    `user:auth:${userId}`,
     `user:${userId}:profile`,
     `user:${userId}:dashboard`,
     `user:${userId}:kyc`,
     `user:${userId}:loans`,
-    `user:${userId}:notifications`,
+    `user:${userId}:notifications`
   );
 };
 

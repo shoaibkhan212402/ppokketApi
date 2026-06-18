@@ -140,7 +140,7 @@ const uploadKYC = async (req, res) => {
     // Invalidate KYC + user cache so fresh data loads
     await delCache(`user:${userId}:kyc`);
     await invalidateUserCache(userId);
-    await delCache('admin:dashboard');
+    await delCache('admin:dashboard', 'admin:dashboard:partner:*');
   } catch (err) {
     console.error('[uploadKYC]', err);
     writeLog(`[${new Date().toISOString()}] [uploadKYC] Outer catch error: ${err.message}\nStack: ${err.stack}`);
@@ -266,7 +266,7 @@ const autoVerifyKYC = async (req, res) => {
 
     await delCache(`user:${userId}:kyc`);
     await invalidateUserCache(userId);
-    await delCache('admin:dashboard');
+    await delCache('admin:dashboard', 'admin:dashboard:partner:*');
 
     res.json({
       success: true,

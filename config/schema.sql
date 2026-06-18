@@ -18,8 +18,14 @@ CREATE TABLE IF NOT EXISTS users (
   monthly_income    DECIMAL(12,2),
   credit_score      INT DEFAULT 650,
   credit_limit      DECIMAL(12,2) DEFAULT 10000.00,
+  withdrawal_limit  DECIMAL(12,2) DEFAULT NULL,  -- NULL = same as credit_limit; set lower to cap withdrawal
   wallet_balance    DECIMAL(12,2) DEFAULT 0.00,
   interest_rate     DECIMAL(5,2) DEFAULT 2.50,
+  custom_processing_fee_pct DECIMAL(5,2) DEFAULT NULL,
+  custom_first_emi_pct      DECIMAL(5,2) DEFAULT NULL,
+  kyc_approved_tenure       INT DEFAULT NULL,
+  kyc_first_emi_amount      DECIMAL(12,2) DEFAULT NULL,
+  kyc_regular_emi_amount    DECIMAL(12,2) DEFAULT NULL,
   referral_code     VARCHAR(20) UNIQUE,
   referred_by       INT,
   fcm_token         TEXT,
@@ -28,6 +34,9 @@ CREATE TABLE IF NOT EXISTS users (
   pan_verified      TINYINT(1) DEFAULT 0,
   aadhaar_verified  TINYINT(1) DEFAULT 0,
   bank_verified     TINYINT(1) DEFAULT 0,
+  is_dsa_partner    TINYINT(1) DEFAULT 0,
+  assigned_partner_id INT DEFAULT NULL,
+  lead_status       ENUM('new','contacted','docs_submitted','kyc_pending','kyc_done','loan_applied','converted','inactive') DEFAULT 'new',
   dark_mode         TINYINT(1) DEFAULT 0,
   language          VARCHAR(10) DEFAULT 'en',
   created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -83,6 +92,9 @@ CREATE TABLE IF NOT EXISTS loans (
   duration_months INT NOT NULL,
   emi_amount      DECIMAL(12,2) NOT NULL,
   processing_fee  DECIMAL(12,2) DEFAULT 0.00,
+  processing_fee_pct DECIMAL(5,2) DEFAULT NULL,
+  first_emi_pct   DECIMAL(5,2) DEFAULT NULL,
+  processing_fee_in_first_emi TINYINT(1) DEFAULT NULL,
   total_payable   DECIMAL(12,2) NOT NULL,
   amount_paid     DECIMAL(12,2) DEFAULT 0.00,
   purpose         VARCHAR(255),
@@ -135,8 +147,30 @@ CREATE TABLE IF NOT EXISTS admins (
   password   VARCHAR(255) NOT NULL,
   role       ENUM('super_admin','admin','reviewer') DEFAULT 'admin',
   is_active  TINYINT(1) DEFAULT 1,
+  created_by INT DEFAULT NULL,
   last_login TIMESTAMP NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (created_by) REFERENCES admins(id) ON DELETE SET NULL
+);
+
+-- ADMIN PERMISSIONS TABLE (granular per-admin access control)
+CREATE TABLE IF NOT EXISTS admin_permissions (
+  id                  INT AUTO_INCREMENT PRIMARY KEY,
+  admin_id            INT NOT NULL UNIQUE,
+  view_dashboard      TINYINT(1) DEFAULT 1,
+  manage_users        TINYINT(1) DEFAULT 1,
+  manage_loans        TINYINT(1) DEFAULT 1,
+  manage_kyc          TINYINT(1) DEFAULT 1,
+  view_transactions   TINYINT(1) DEFAULT 1,
+  manage_transactions TINYINT(1) DEFAULT 0,
+  send_notifications  TINYINT(1) DEFAULT 1,
+  manage_referrals    TINYINT(1) DEFAULT 1,
+  manage_settings     TINYINT(1) DEFAULT 0,
+  manage_admins       TINYINT(1) DEFAULT 0,
+  manage_dsa          TINYINT(1) DEFAULT 0,
+  created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (admin_id) REFERENCES admins(id) ON DELETE CASCADE
 );
 
 -- BANK DETAILS TABLE
@@ -160,8 +194,11 @@ CREATE TABLE IF NOT EXISTS referrals (
   referrer_id     INT NOT NULL,
   referred_id     INT NOT NULL,
   cashback_amount DECIMAL(10,2) DEFAULT 200.00,
+  credited_amount DECIMAL(10,2) DEFAULT NULL,
   status          ENUM('pending','credited') DEFAULT 'pending',
+  note            VARCHAR(500) DEFAULT NULL,
   created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_referral_pair (referrer_id, referred_id),
   FOREIGN KEY (referrer_id) REFERENCES users(id),
   FOREIGN KEY (referred_id) REFERENCES users(id)
 );
@@ -188,11 +225,17 @@ INSERT IGNORE INTO admins (name, email, password, role)
 VALUES ('Super Admin', 'admin@ppokket.com', '$2b$10$yQGnMfomJsbW9fvWFhH/zO.s/I.YUx2ujz9tXTOjvgJd9laGbAZTu', 'super_admin');
 -- Default password: Admin@123
 
+-- Deferred FK: users.assigned_partner_id → admins(id) (defined here because admins table comes after users)
+ALTER TABLE users ADD CONSTRAINT fk_users_assigned_partner
+  FOREIGN KEY (assigned_partner_id) REFERENCES admins(id) ON DELETE SET NULL;
+
 -- INDEXES
-CREATE INDEX IF NOT EXISTS idx_users_mobile        ON users(mobile);
-CREATE INDEX IF NOT EXISTS idx_loans_user_id       ON loans(user_id);
-CREATE INDEX IF NOT EXISTS idx_loans_status        ON loans(status);
-CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_user_id ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_emi_loan_id         ON emi_schedule(loan_id);
-CREATE INDEX IF NOT EXISTS idx_emi_due_date        ON emi_schedule(due_date);
+CREATE INDEX idx_users_mobile           ON users(mobile);
+CREATE INDEX idx_users_is_dsa_partner   ON users(is_dsa_partner);
+CREATE INDEX idx_users_assigned_partner ON users(assigned_partner_id);
+CREATE INDEX idx_loans_user_id          ON loans(user_id);
+CREATE INDEX idx_loans_status           ON loans(status);
+CREATE INDEX idx_transactions_user_id   ON transactions(user_id);
+CREATE INDEX idx_notifications_user_id  ON notifications(user_id);
+CREATE INDEX idx_emi_loan_id            ON emi_schedule(loan_id);
+CREATE INDEX idx_emi_due_date           ON emi_schedule(due_date);

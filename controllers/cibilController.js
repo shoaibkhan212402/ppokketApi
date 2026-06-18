@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { fetchCibilReport, parseCibilReport } = require('../utils/insightApi');
+const { invalidateUserCache } = require('../config/redis');
 
 // Ensure cibil_reports table exists
 const initCibilTable = async () => {
@@ -33,7 +34,6 @@ const initCibilTable = async () => {
     console.error('❌ Failed to initialize cibil_reports table:', err.message || err);
   }
 };
-initCibilTable();
 
 // Helper to safely parse JSON field from MySQL row
 const safeParseJSON = (data) => {
@@ -92,6 +92,7 @@ const userCheckCibil = async (req, res) => {
           `UPDATE users SET credit_score = ?, pan_number = COALESCE(pan_number, ?), full_name = COALESCE(full_name, ?), updated_at = NOW() WHERE id = ?`,
           [cached.cibilScore, cached.pan, parsedData?.fullName || cached.name, userId]
         );
+        await invalidateUserCache(userId);
       }
 
       // Link report to userId if not set
@@ -164,6 +165,7 @@ const userCheckCibil = async (req, res) => {
         `UPDATE users SET credit_score = ?, pan_number = COALESCE(pan_number, ?), full_name = COALESCE(full_name, ?), updated_at = NOW() WHERE id = ?`,
         [parsed.score, resolvedPan, parsed.fullName || resolvedName, userId]
       );
+      await invalidateUserCache(userId);
     }
 
     res.json({
@@ -285,6 +287,7 @@ const userDeleteLatestReport = async (req, res) => {
       `UPDATE users SET credit_score = NULL, updated_at = NOW() WHERE id = ?`,
       [userId]
     );
+    await invalidateUserCache(userId);
 
     res.json({ success: true, message: `${deleteResult.affectedRows} CIBIL record(s) deleted.` });
 
@@ -304,20 +307,36 @@ const adminGetReports = async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
     const search = req.query.search || '';
+    const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
 
-    let countQuery = `SELECT COUNT(*) as count FROM cibil_reports WHERE status = 'Fetched'`;
-    let selectQuery = `SELECT id, pan, mobile, name, cibilScore, creditHealth, populationRank, loanType, loanId, htmlUrl, createdAt, status FROM cibil_reports WHERE status = 'Fetched'`;
-    let params = [];
+    let countQuery = `SELECT COUNT(*) as count FROM cibil_reports cr`;
+    let selectQuery = `SELECT cr.id, cr.pan, cr.mobile, cr.name, cr.cibilScore, cr.creditHealth, cr.populationRank, cr.loanType, cr.loanId, cr.htmlUrl, cr.createdAt, cr.status FROM cibil_reports cr`;
+
+    if (isPartner) {
+      countQuery += ` JOIN users u ON u.id = cr.userId`;
+      selectQuery += ` JOIN users u ON u.id = cr.userId`;
+    }
+
+    countQuery += ` WHERE cr.status = 'Fetched'`;
+    selectQuery += ` WHERE cr.status = 'Fetched'`;
+
+    const params = [];
+
+    if (isPartner) {
+      countQuery += ` AND u.assigned_partner_id = ?`;
+      selectQuery += ` AND u.assigned_partner_id = ?`;
+      params.push(req.admin.id);
+    }
 
     if (search) {
       const searchWildcard = `%${search}%`;
-      const searchCondition = ` AND (pan LIKE ? OR mobile LIKE ? OR name LIKE ?)`;
+      const searchCondition = ` AND (cr.pan LIKE ? OR cr.mobile LIKE ? OR cr.name LIKE ?)`;
       countQuery += searchCondition;
       selectQuery += searchCondition;
-      params = [searchWildcard, searchWildcard, searchWildcard];
+      params.push(searchWildcard, searchWildcard, searchWildcard);
     }
 
-    selectQuery += ` ORDER BY createdAt DESC LIMIT ? OFFSET ?`;
+    selectQuery += ` ORDER BY cr.createdAt DESC LIMIT ? OFFSET ?`;
     const [countRows] = await pool.query(countQuery, params);
     const total = countRows[0].count;
 
@@ -378,6 +397,7 @@ const adminDeleteReport = async (req, res) => {
 };
 
 module.exports = {
+  initCibilTable,
   userCheckCibil,
   userGetLatestReport,
   userDeleteLatestReport,

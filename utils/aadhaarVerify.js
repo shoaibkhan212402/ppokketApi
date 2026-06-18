@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 const BASE_URL   = 'https://apitxt.com/api';
-const AUTH_KEY   = () => process.env.PAN_VERIFY_AUTH_KEY || '';
+const AUTH_KEY   = () => process.env.APITXT_AUTHKEY || '';
 
 /**
  * Error code maps
@@ -61,7 +61,14 @@ const aadhaarSendOTP = async (aadhaarNumber) => {
     };
   }
 
-  if (process.env.NODE_ENV !== 'production' || !authKey) {
+  if (!authKey) {
+    if (process.env.NODE_ENV === 'production') {
+      return {
+        success: false, referenceId: null, maskedAadhaar: null,
+        requestId: null, message: 'Aadhaar Authentication Key is not configured.',
+        errorCode: 105, raw: null,
+      };
+    }
     return {
       success:       true,
       referenceId:   `AADHAAR-MOCK-REF-${Date.now()}`,
@@ -78,11 +85,36 @@ const aadhaarSendOTP = async (aadhaarNumber) => {
     raw = await post('aadhaarSendOTP', { authkey: authKey, aadhaar_number: clean });
   } catch (err) {
     console.error('[Aadhaar SendOTP] HTTP error:', err.message);
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Aadhaar SendOTP] Falling back to mock data in development.');
+      return {
+        success:       true,
+        referenceId:   `AADHAAR-MOCK-REF-${Date.now()}`,
+        maskedAadhaar: `XXXX-XXXX-${clean.slice(-4)}`,
+        requestId:     `AADHAAR-MOCK-REQ-${Date.now()}`,
+        message:       null,
+        errorCode:     null,
+        raw:           { mock: true, error: err.message },
+      };
+    }
     throw new Error('Aadhaar OTP service temporarily unavailable. Please try again later.');
   }
 
   if (raw?.status !== 200) {
     const errDesc = SEND_OTP_ERRORS[raw?.status] || raw?.message || `API error ${raw?.status}`;
+
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Aadhaar SendOTP] API returned non-200. Falling back to mock data in development:', errDesc);
+      return {
+        success:       true,
+        referenceId:   `AADHAAR-MOCK-REF-${Date.now()}`,
+        maskedAadhaar: `XXXX-XXXX-${clean.slice(-4)}`,
+        requestId:     `AADHAAR-MOCK-REQ-${Date.now()}`,
+        message:       null,
+        errorCode:     null,
+        raw:           { mock: true, error: errDesc },
+      };
+    }
 
     return {
       success: false, referenceId: null, maskedAadhaar: null,
@@ -136,7 +168,14 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
     };
   }
 
-  if (process.env.NODE_ENV !== 'production' || !authKey) {
+  if (!authKey) {
+    if (process.env.NODE_ENV === 'production') {
+      return {
+        success: false, verified: false, name: null, dob: null, gender: null,
+        careOf: null, fullAddress: null, address: null, photo: null, hasPhoto: false,
+        requestId: null, message: 'Aadhaar Authentication Key is not configured.', errorCode: 105, raw: null,
+      };
+    }
     return {
       success:     true,
       verified:    true,
@@ -162,11 +201,50 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
     });
   } catch (err) {
     console.error('[Aadhaar VerifyOTP] HTTP error:', err.message);
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Aadhaar VerifyOTP] Falling back to mock data in development.');
+      return {
+        success:     true,
+        verified:    true,
+        name:        'Test Aadhaar User',
+        dob:         '1995-08-15',
+        gender:      'M',
+        careOf:      'S/O Test Parent',
+        fullAddress: '123, Test Street, Test City, Test State - 110001',
+        address:     { house: '123', street: 'Test Street', lm: '', loc: '', vtc: 'Test City', po: 'Test City', subdist: 'Test', dist: 'Test', state: 'Test State', pc: '110001' },
+        photo:       null,
+        hasPhoto:    false,
+        requestId:   `AADHAAR-MOCK-REQ-${Date.now()}`,
+        message:     null,
+        errorCode:   null,
+        raw:         { mock: true, error: err.message },
+      };
+    }
     throw new Error('Aadhaar OTP verification service temporarily unavailable. Please try again later.');
   }
 
   if (raw?.status !== 200) {
     const errDesc = VERIFY_OTP_ERRORS[raw?.status] || raw?.message || `API error ${raw?.status}`;
+
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[Aadhaar VerifyOTP] API returned non-200. Falling back to mock data in development:', errDesc);
+      return {
+        success:     true,
+        verified:    true,
+        name:        'Test Aadhaar User',
+        dob:         '1995-08-15',
+        gender:      'M',
+        careOf:      'S/O Test Parent',
+        fullAddress: '123, Test Street, Test City, Test State - 110001',
+        address:     { house: '123', street: 'Test Street', lm: '', loc: '', vtc: 'Test City', po: 'Test City', subdist: 'Test', dist: 'Test', state: 'Test State', pc: '110001' },
+        photo:       null,
+        hasPhoto:    false,
+        requestId:   `AADHAAR-MOCK-REQ-${Date.now()}`,
+        message:     null,
+        errorCode:   null,
+        raw:         { mock: true, error: errDesc },
+      };
+    }
 
     return {
       success: false, verified: false, name: null, dob: null, gender: null,
