@@ -565,7 +565,8 @@ const getPendingKYC = async (req, res) => {
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
     let query = `
        SELECT k.*, u.full_name, u.mobile, u.email, u.pan_number, u.aadhaar_number,
-              bd.bank_name, bd.account_holder, bd.account_number, bd.ifsc_code, bd.account_type
+              bd.bank_name, bd.account_holder, bd.account_number, bd.ifsc_code, bd.account_type,
+              COALESCE(bd.is_verified, 0) AS bank_verified
        FROM kyc_documents k
        JOIN users u ON u.id = k.user_id
        LEFT JOIN bank_details bd ON bd.user_id = u.id

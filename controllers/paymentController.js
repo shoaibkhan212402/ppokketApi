@@ -14,13 +14,17 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'loan_id and amount required' });
     }
 
-    // Verify loan belongs to user
+    // Verify loan belongs to user and is active (disbursed or approved with EMI schedule)
     const [loan] = await pool.query(
-      'SELECT * FROM loans WHERE id = ? AND user_id = ? AND status = "disbursed"',
+      'SELECT * FROM loans WHERE id = ? AND user_id = ? AND status IN ("disbursed", "approved")',
       [loan_id, userId]
     );
     if (!loan.length) {
-      return res.status(404).json({ success: false, message: 'Loan not found or not disbursed' });
+      // Debug: check what status the loan actually has
+      const [debug] = await pool.query('SELECT id, status FROM loans WHERE id = ? AND user_id = ?', [loan_id, userId]);
+      const actualStatus = debug.length ? debug[0].status : 'NOT_FOUND';
+      console.log(`[createOrder] Rejected loan ${loan_id} — actual status: ${actualStatus}`);
+      return res.status(404).json({ success: false, message: `Loan not found or not active (status: ${actualStatus})` });
     }
 
     const [userRow] = await pool.query('SELECT full_name, mobile, email FROM users WHERE id = ?', [userId]);
@@ -45,7 +49,7 @@ const createOrder = async (req, res) => {
             customer_name: user.full_name || 'Customer'
           },
           order_meta: {
-            return_url: `${req.headers.origin || 'http://localhost:5173'}/profile?tab=Payments`
+            return_url: `${req.headers.origin || 'http://localhost:5173'}/profile?tab=Loan+History&order_id={order_id}`
           }
         }, {
           headers: {

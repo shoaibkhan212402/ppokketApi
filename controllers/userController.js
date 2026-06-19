@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { sendNotification } = require('../utils/fcm');
+const { verifyBankAccount } = require('../utils/bankVerify');
 
 // GET /api/user/profile
 const getProfile = async (req, res) => {
@@ -134,20 +135,44 @@ const updateBankDetails = async (req, res) => {
 const verifyBankDetails = async (req, res) => {
   try {
     const { account_holder, account_number, ifsc_code, bank_name, account_type } = req.body;
+    const userId = req.user.id;
     
     if (!account_holder || !account_number || !ifsc_code || !bank_name) {
       return res.status(400).json({ success: false, message: 'All fields are required for bank verification.' });
     }
 
-    // Dummy Validation Checks
-    if (!/^\d{9,18}$/.test(account_number)) {
+    const cleanAcc = account_number.trim();
+    if (!/^\d{9,18}$/.test(cleanAcc)) {
       return res.status(400).json({ success: false, message: 'Invalid bank account number. Must be between 9 and 18 digits.' });
     }
 
+    const cleanIfsc = ifsc_code.trim().toUpperCase();
     const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-    if (!ifscRegex.test(ifsc_code.trim().toUpperCase())) {
+    if (!ifscRegex.test(cleanIfsc)) {
       return res.status(400).json({ success: false, message: 'Invalid IFSC code format. E.g. HDFC0001234' });
     }
+
+    // Fetch user mobile number to pass as an optional parameter to APItxt
+    const [userRow] = await pool.query('SELECT mobile FROM users WHERE id = ?', [userId]);
+    const mobile = userRow[0]?.mobile || '';
+
+    // Call Penny Drop API
+    const verifyRes = await verifyBankAccount({
+      ifsc: cleanIfsc,
+      accountNumber: cleanAcc,
+      name: account_holder.trim(),
+      mobile: mobile,
+      useCache: true,
+    });
+
+    if (!verifyRes.success || !verifyRes.accountExists) {
+      return res.status(400).json({
+        success: false,
+        message: verifyRes.message || 'Bank Account verification failed. Account does not exist.'
+      });
+    }
+
+    const finalHolderName = verifyRes.nameAtBank || account_holder.trim();
 
     // Save/Update with is_verified = 1
     await pool.query(
@@ -162,22 +187,27 @@ const verifyBankDetails = async (req, res) => {
          is_verified = 1,
          updated_at = NOW()`,
       [
-        req.user.id,
-        account_holder.trim(),
-        account_number.trim(),
-        ifsc_code.trim().toUpperCase(),
+        userId,
+        finalHolderName,
+        cleanAcc,
+        cleanIfsc,
         bank_name.trim(),
         account_type || 'savings'
       ]
     );
 
+    // Update bank_verified = 1 in users table
+    await pool.query('UPDATE users SET bank_verified = 1 WHERE id = ?', [userId]);
+
     // Invalidate user caches
-    await invalidateUserCache(req.user.id);
+    await invalidateUserCache(userId);
 
     return res.json({
       success: true,
       verified: true,
-      message: 'Bank account verified successfully via dummy gateway.'
+      name_at_bank: finalHolderName,
+      utr: verifyRes.utr,
+      message: 'Bank account verified successfully via Penny Drop API.'
     });
   } catch (err) {
     console.error('[verifyBankDetails]', err);
