@@ -80,6 +80,37 @@ const updateProfile = async (req, res) => {
       }
     }
 
+    // Prevent updates to verified details
+    const [userRow] = await pool.query('SELECT is_kyc_verified, pan_verified, aadhaar_verified, full_name as old_name, email as old_email, date_of_birth as old_dob, occupation as old_occ, monthly_income as old_inc, pan_number as old_pan, aadhaar_number as old_aadhaar FROM users WHERE id = ?', [req.user.id]);
+    const u = userRow[0] || {};
+    
+    let final_pan = pan_number;
+    let final_aadhaar = aadhaar_number;
+    let final_name = full_name;
+    let final_email = email;
+    let final_dob = date_of_birth;
+    let final_occ = occupation;
+    let final_inc = monthly_income;
+
+    // Individual locks
+    if (u.pan_verified && pan_number && pan_number.toUpperCase() !== u.old_pan) {
+      final_pan = u.old_pan; 
+    }
+    if (u.aadhaar_verified && aadhaar_number && aadhaar_number !== u.old_aadhaar) {
+      final_aadhaar = u.old_aadhaar;
+    }
+
+    // Full KYC lock
+    if (u.is_kyc_verified) {
+      final_name = u.old_name;
+      final_email = u.old_email;
+      final_dob = u.old_dob;
+      final_occ = u.old_occ;
+      final_inc = u.old_inc;
+      final_pan = u.old_pan;
+      final_aadhaar = u.old_aadhaar;
+    }
+
     await pool.query(
       `UPDATE users SET
         full_name = COALESCE(?, full_name),
@@ -94,7 +125,7 @@ const updateProfile = async (req, res) => {
         language = COALESCE(?, language),
         updated_at = NOW()
       WHERE id = ?`,
-      [full_name, email, pan_number, aadhaar_number, date_of_birth, occupation, monthly_income, fcm_token, dark_mode, language, req.user.id]
+      [final_name, final_email, final_pan, final_aadhaar, final_dob, final_occ, final_inc, fcm_token, dark_mode, language, req.user.id]
     );
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
     const user = rows[0];
@@ -110,6 +141,11 @@ const updateProfile = async (req, res) => {
 // PUT /api/user/bank-details
 const updateBankDetails = async (req, res) => {
   try {
+    const [check] = await pool.query('SELECT is_verified FROM bank_details WHERE user_id = ?', [req.user.id]);
+    if (check.length && check[0].is_verified) {
+      return res.status(400).json({ success: false, message: 'Bank details are already verified and cannot be changed.' });
+    }
+
     const { account_holder, account_number, ifsc_code, bank_name, account_type } = req.body;
     await pool.query(
       `INSERT INTO bank_details (user_id, account_holder, account_number, ifsc_code, bank_name, account_type)
@@ -356,5 +392,35 @@ const checkEligibility = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, checkEligibility };
+// GET /api/user/notifications
+const getNotifications = async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50',
+      [req.user.id]
+    );
+    res.json({ success: true, notifications: rows });
+  } catch (err) {
+    console.error('[getNotifications]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/user/notifications/read
+const markNotificationsRead = async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0',
+      [req.user.id]
+    );
+    // Invalidate dashboard cache since unread count will change
+    await invalidateUserCache(req.user.id);
+    res.json({ success: true, message: 'Marked as read' });
+  } catch (err) {
+    console.error('[markNotificationsRead]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, checkEligibility, getNotifications, markNotificationsRead };
 
