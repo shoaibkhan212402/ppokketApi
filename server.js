@@ -19,6 +19,7 @@ const paymentRoutes      = require('./routes/paymentRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const adminRoutes        = require('./routes/adminRoutes');
 const cibilRoutes        = require('./routes/cibilRoutes');
+const experianRoutes     = require('./routes/experianRoutes');
 const aadhaarRoutes      = require('./routes/aadhaarRoutes');
 const referralRoutes     = require('./routes/referralRoutes');
 const dsaRoutes          = require('./routes/dsaRoutes');
@@ -74,6 +75,7 @@ app.use('/api/payment',       paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin',         adminRoutes);
 app.use('/api/cibil',         cibilRoutes);
+app.use('/api/experian',      experianRoutes);
 app.use('/api/aadhaar',       aadhaarRoutes);
 app.use('/api/referral',      referralRoutes);
 app.use('/api/dsa',           dsaRoutes);
@@ -123,11 +125,15 @@ connectDB().then(async (dbConnected) => {
       const { initCibilTable } = require('./controllers/cibilController');
       await initCibilTable();
       console.log('✅ CIBIL table check completed');
-    } catch (cibilErr) {
-      console.error('❌ Failed to run CIBIL table initialization:', cibilErr);
+      
+      const { initExperianTable } = require('./controllers/experianController');
+      await initExperianTable();
+      console.log('✅ Experian table check completed');
+    } catch (tableErr) {
+      console.error('❌ Failed to run table initialization:', tableErr);
     }
   } else {
-    console.warn('⚠️ Deferring CIBIL table initialization due to database connection failure.');
+    console.warn('⚠️ Deferring table initialization due to database connection failure.');
   }
 
   await connectRedis();

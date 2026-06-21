@@ -224,7 +224,7 @@ const getDashboard = async (req, res) => {
     if (cached) return res.json(cached);
 
     const [userRows] = await pool.query(
-      'SELECT credit_limit, wallet_balance, credit_score, is_kyc_verified FROM users WHERE id = ?', [userId]
+      'SELECT credit_limit, wallet_balance, credit_score, experian_score, is_kyc_verified FROM users WHERE id = ?', [userId]
     );
     const [kycRows] = await pool.query(
       'SELECT status FROM kyc_documents WHERE user_id = ?', [userId]

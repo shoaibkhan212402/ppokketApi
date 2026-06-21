@@ -105,7 +105,7 @@ const getAllUsers = async (req, res) => {
 
     let query = `
       SELECT u.id, u.full_name, u.mobile, u.email, u.date_of_birth as dob, u.pan_number, u.aadhaar_number,
-              u.monthly_income, u.occupation as employment_type, u.credit_score, u.credit_limit, u.wallet_balance,
+              u.monthly_income, u.occupation as employment_type, u.credit_score, u.experian_score, u.experian_fetched_at, u.credit_limit, u.wallet_balance,
               u.interest_rate, u.is_active, u.is_kyc_verified, u.is_dsa_partner, u.created_at,
               u.custom_processing_fee_pct, u.custom_first_emi_pct,
               u.kyc_approved_tenure, u.kyc_first_emi_amount, u.kyc_regular_emi_amount,

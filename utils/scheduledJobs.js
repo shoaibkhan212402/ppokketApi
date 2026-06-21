@@ -162,6 +162,160 @@ const cleanOldAuditLogs = async () => {
   }
 };
 
+// ── JOB 4: Daily EMI Auto-Debits via Cashfree (runs at 09:30 every day) ────────
+const processAutoDebits = async () => {
+  const conn = await pool.getConnection();
+  const crypto = require('crypto');
+  try {
+    console.log('[cron] Running EMI Auto-Debit job...');
+
+    // Find all upcoming EMIs due today where the user has an active mandate
+    const [dueEmis] = await conn.query(
+      `SELECT e.id AS emi_id, e.loan_id, e.installment_no, e.emi_amount, e.due_date,
+              u.id AS user_id, u.full_name, u.mobile, u.fcm_token,
+              m.subscription_id, m.payment_mode
+         FROM emi_schedule e
+         JOIN bank_mandates m ON m.user_id = e.user_id AND m.status = 'active'
+         JOIN users u ON u.id = e.user_id
+        WHERE e.status = 'upcoming'
+          AND e.due_date = CURDATE()`
+    );
+
+    console.log(`[cron] Found ${dueEmis.length} due EMIs with active mandates to process.`);
+
+    const appId = process.env.CASHFREE_APP_ID;
+    const secretKey = process.env.CASHFREE_SECRET_KEY;
+    const cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
+    const isMockGlobal = !appId || appId.includes('placeholder') || !secretKey || secretKey.includes('placeholder');
+    const baseUrl = cfEnv === 'production' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com';
+
+    const { sendNotification } = require('./fcm');
+
+    for (const emi of dueEmis) {
+      console.log(`[cron][AutoDebit] Processing EMI #${emi.installment_no} of Loan #${emi.loan_id} for user ${emi.full_name} (${emi.emi_amount} INR)...`);
+
+      const isMock = isMockGlobal || emi.payment_mode === 'mock';
+      const orderId = `auto_${emi.loan_id}_${emi.installment_no}_${Date.now()}`;
+      const paymentId = isMock ? `pay_auto_mock_${crypto.randomBytes(6).toString('hex')}` : `pay_auto_${Date.now()}`;
+
+      // Insert pending transaction
+      await conn.query(
+        `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, razorpay_payment_id, amount, type, status, description)
+         VALUES (?, ?, ?, ?, ?, 'emi', 'pending', ?)`,
+        [
+          emi.user_id,
+          emi.loan_id,
+          orderId,
+          isMock ? paymentId : null,
+          emi.emi_amount,
+          `Automatic EMI payment (Installment #${emi.installment_no})`
+        ]
+      );
+
+      if (isMock) {
+        // In mock mode, complete the payment successfully right away
+        await conn.beginTransaction();
+        try {
+          // Update transaction
+          await conn.query(
+            "UPDATE transactions SET status = 'success' WHERE razorpay_order_id = ?",
+            [orderId]
+          );
+
+          // Update loan paid amount
+          await conn.query(
+            "UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?",
+            [emi.emi_amount, emi.loan_id]
+          );
+
+          // Update EMI status
+          await conn.query(
+            "UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW() WHERE id = ?",
+            [emi.emi_amount, emi.emi_id]
+          );
+
+          // Check if loan closed
+          const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [emi.loan_id]);
+          if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+            await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [emi.loan_id]);
+          }
+
+          // Send confirmation notifications
+          const msg = `Auto-Debit Successful: ₹${emi.emi_amount} was successfully auto-debited for EMI #${emi.installment_no} of Loan #${emi.loan_id}.`;
+          await conn.query(
+            'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+            [emi.user_id, 'Auto-Debit Successful ✅', msg, 'payment']
+          );
+
+          if (emi.fcm_token) {
+            sendNotification(emi.fcm_token, 'Auto-Debit Successful ✅', msg, { screen: 'Loans' }).catch(() => {});
+          }
+
+          await conn.commit();
+          console.log(`[cron][AutoDebit] Mandate success (mock) for EMI #${emi.emi_id}`);
+        } catch (dbErr) {
+          await conn.rollback();
+          console.error(`[cron][AutoDebit] DB Error in mock transaction execution:`, dbErr.message);
+        }
+      } else {
+        // Call Cashfree Raise Charge API
+        try {
+          const payUrl = `${baseUrl}/pg/subscriptions/pay`;
+          const payRes = await fetch(payUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Client-Id': appId,
+              'X-Client-Secret': secretKey
+            },
+            body: JSON.stringify({
+              subscription_id: emi.subscription_id,
+              payment_id: orderId,
+              payment_amount: parseFloat(emi.emi_amount),
+              payment_remarks: `Auto recovery EMI #${emi.installment_no} for Loan #${emi.loan_id}`,
+              payment_type: 'CHARGE'
+            })
+          });
+
+          const payData = await payRes.json();
+
+          if (payRes.status === 200) {
+            console.log(`[cron][AutoDebit] Cashfree charge initiated successfully for sub_id ${emi.subscription_id}:`, payData);
+          } else {
+            console.error(`[cron][AutoDebit] Cashfree charge failed for sub_id ${emi.subscription_id}:`, payData);
+            // Mark transaction failed
+            await conn.query(
+              "UPDATE transactions SET status = 'failed', description = ? WHERE razorpay_order_id = ?",
+              [`Cashfree Auto-Debit Failed: ${payData.message || 'Unknown error'}`, orderId]
+            );
+
+            // Notify user about auto-debit failure
+            const failMsg = `Auto-Debit Failed: Automatic deduction of ₹${emi.emi_amount} failed. Please pay manually to avoid overdue charges.`;
+            await conn.query(
+              'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+              [emi.user_id, 'Auto-Debit Failed ⚠️', failMsg, 'payment']
+            );
+
+            if (emi.fcm_token) {
+              sendNotification(emi.fcm_token, 'Auto-Debit Failed ⚠️', failMsg, { screen: 'Loans' }).catch(() => {});
+            }
+          }
+        } catch (apiErr) {
+          console.error(`[cron][AutoDebit] API request exception for sub_id ${emi.subscription_id}:`, apiErr.message);
+          await conn.query(
+            "UPDATE transactions SET status = 'failed', description = ? WHERE razorpay_order_id = ?",
+            [`API error: ${apiErr.message}`, orderId]
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[cron][auto-debit-job]', err.message);
+  } finally {
+    conn.release();
+  }
+};
+
 // ── Register all cron jobs ────────────────────────────────────────────────────
 const registerJobs = () => {
   // Penalty calculation — every day at 00:05
@@ -173,7 +327,10 @@ const registerJobs = () => {
   // Audit log cleanup — every Sunday at 02:00
   cron.schedule('0 2 * * 0', cleanOldAuditLogs, { timezone: 'Asia/Kolkata' });
 
-  console.log('✅ Scheduled jobs registered: penalty, EMI reminders, audit cleanup');
+  // Auto-debit processing — every day at 09:30
+  cron.schedule('30 9 * * *', processAutoDebits, { timezone: 'Asia/Kolkata' });
+
+  console.log('✅ Scheduled jobs registered: penalty, EMI reminders, audit cleanup, auto-debit');
 };
 
-module.exports = { registerJobs, markOverdueAndCalcPenalty, sendEmiReminders };
+module.exports = { registerJobs, markOverdueAndCalcPenalty, sendEmiReminders, processAutoDebits };

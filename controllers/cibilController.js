@@ -396,6 +396,154 @@ const adminDeleteReport = async (req, res) => {
   }
 };
 
+// ==========================================
+// ADMIN: Fetch CIBIL for a user on demand
+// POST /api/admin/cibil/fetch/:userId
+// ==========================================
+const adminFetchCibil = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const [userRows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+    if (!userRows.length) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    const user = userRows[0];
+
+    const name = (user.pancardName || user.full_name || '').trim();
+    const pan = (user.pan_number || '').trim().toUpperCase();
+    const mobile = user.mobile;
+
+    if (!name) {
+      return res.status(422).json({ success: false, error: 'User name is missing. Full name is required.' });
+    }
+    if (!pan) {
+      return res.status(422).json({ success: false, error: 'PAN is missing. PAN card is required.' });
+    }
+
+    // Cache check: same PAN
+    const [cachedRows] = await pool.query(
+      `SELECT * FROM cibil_reports 
+       WHERE pan = ? AND status = 'Fetched' AND cibilScore IS NOT NULL 
+       ORDER BY createdAt DESC LIMIT 1`,
+      [pan]
+    );
+
+    if (cachedRows.length > 0) {
+      const cached = cachedRows[0];
+      const parsedData = safeParseJSON(cached.parsedData);
+
+      // Update user's credit score in DB if different
+      if (user.credit_score !== cached.cibilScore) {
+        await pool.query(
+          `UPDATE users SET credit_score = ?, updated_at = NOW() WHERE id = ?`,
+          [cached.cibilScore, userId]
+        );
+        await invalidateUserCache(userId);
+      }
+
+      // Link report to userId if not set
+      if (!cached.userId) {
+        await pool.query('UPDATE cibil_reports SET userId = ? WHERE id = ?', [userId, cached.id]);
+      }
+
+      return res.json({
+        success: true,
+        fromCache: true,
+        data: {
+          score: cached.cibilScore,
+          creditHealth: cached.creditHealth,
+          populationRank: cached.populationRank,
+          htmlUrl: cached.htmlUrl,
+          fullName: parsedData?.fullName || cached.name,
+          pan: cached.pan,
+          addresses: parsedData?.addresses || [],
+          phones: parsedData?.phones || [],
+          emails: parsedData?.emails || [],
+          identifiers: parsedData?.identifiers || [],
+          employerOccupation: parsedData?.employerOccupation || '',
+          scoreFactors: parsedData?.scoreFactors || [],
+          accountCount: parsedData?.accountCount || 0,
+          accounts: parsedData?.accounts || []
+        },
+        reportId: cached.id
+      });
+    }
+
+    // Call CIBIL API
+    let rawResponse;
+    try {
+      rawResponse = await fetchCibilReport({
+        name,
+        pan,
+        mobile,
+        consent: 'Y'
+      });
+    } catch (apiErr) {
+      console.error('[CIBIL API Err]:', apiErr.message);
+      return res.status(502).json({
+        success: false,
+        error: 'CIBIL service temporarily unavailable. Please try again later.'
+      });
+    }
+
+    const parsed = parseCibilReport(rawResponse);
+
+    // Save report
+    const [insertResult] = await pool.query(
+      `INSERT INTO cibil_reports (pan, mobile, name, userId, cibilScore, creditHealth, populationRank, htmlUrl, parsedData, rawResponse, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Fetched')`,
+      [
+        pan,
+        mobile,
+        name,
+        userId,
+        parsed.score,
+        parsed.creditHealth,
+        parsed.populationRank,
+        parsed.htmlUrl,
+        JSON.stringify(parsed),
+        JSON.stringify(rawResponse)
+      ]
+    );
+
+    // Update user's credit score
+    if (parsed.score) {
+      await pool.query(
+        `UPDATE users SET credit_score = ?, updated_at = NOW() WHERE id = ?`,
+        [parsed.score, userId]
+      );
+      await invalidateUserCache(userId);
+    }
+
+    res.json({
+      success: true,
+      fromCache: false,
+      data: {
+        score: parsed.score,
+        creditHealth: parsed.creditHealth,
+        populationRank: parsed.populationRank,
+        htmlUrl: parsed.htmlUrl,
+        fullName: parsed.fullName,
+        pan,
+        addresses: parsed.addresses || [],
+        phones: parsed.phones || [],
+        emails: parsed.emails || [],
+        identifiers: parsed.identifiers || [],
+        employerOccupation: parsed.employerOccupation || '',
+        scoreFactors: parsed.scoreFactors || [],
+        accountCount: parsed.accountCount || 0,
+        accounts: parsed.accounts || []
+      },
+      reportId: insertResult.insertId
+    });
+
+  } catch (error) {
+    console.error('[Admin CIBIL Fetch Error]', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
 module.exports = {
   initCibilTable,
   userCheckCibil,
@@ -403,6 +551,7 @@ module.exports = {
   userDeleteLatestReport,
   adminGetReports,
   adminGetReportDetail,
-  adminDeleteReport
+  adminDeleteReport,
+  adminFetchCibil
 };
 

@@ -25,10 +25,17 @@ const {
 } = require('../controllers/adminController');
 const { adminProtect, requireSuperAdmin, requirePermission } = require('../middleware/auth');
 const {
-  adminGetReports,
-  adminGetReportDetail,
-  adminDeleteReport
+  adminGetReports: adminGetCibilReports,
+  adminGetReportDetail: adminGetCibilReportDetail,
+  adminDeleteReport: adminDeleteCibilReport,
+  adminFetchCibil
 } = require('../controllers/cibilController');
+const {
+  adminFetchExperian,
+  adminGetReports: adminGetExperianReports,
+  adminGetReportDetail: adminGetExperianReportDetail,
+  adminDeleteReport: adminDeleteExperianReport
+} = require('../controllers/experianController');
 const { adminGetReferrals, adminCreditReferral } = require('../controllers/referralController');
 
 router.use(adminProtect); // All admin routes protected
@@ -69,9 +76,16 @@ router.get('/system-settings', requirePermission('manage_settings'), getSystemSe
 router.put('/system-settings', requirePermission('manage_settings'), updateSystemSettings);
 
 // CIBIL reports
-router.get('/cibil/reports', requirePermission('view_transactions'), adminGetReports);
-router.get('/cibil/reports/:reportId', requirePermission('view_transactions'), adminGetReportDetail);
-router.delete('/cibil/reports/:reportId', requirePermission('manage_settings'), adminDeleteReport);
+router.post('/cibil/fetch/:userId', requirePermission('view_transactions'), adminFetchCibil);
+router.get('/cibil/reports', requirePermission('view_transactions'), adminGetCibilReports);
+router.get('/cibil/reports/:reportId', requirePermission('view_transactions'), adminGetCibilReportDetail);
+router.delete('/cibil/reports/:reportId', requirePermission('manage_settings'), adminDeleteCibilReport);
+
+// Experian reports
+router.post('/experian/fetch/:userId', requirePermission('view_transactions'), adminFetchExperian);
+router.get('/experian/reports', requirePermission('view_transactions'), adminGetExperianReports);
+router.get('/experian/reports/:reportId', requirePermission('view_transactions'), adminGetExperianReportDetail);
+router.delete('/experian/reports/:reportId', requirePermission('manage_settings'), adminDeleteExperianReport);
 
 // Referrals
 router.get('/referrals', requirePermission('manage_referrals'), adminGetReferrals);

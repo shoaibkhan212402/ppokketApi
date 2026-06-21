@@ -229,6 +229,22 @@ VALUES ('Super Admin', 'admin@ppokket.com', '$2b$10$yQGnMfomJsbW9fvWFhH/zO.s/I.Y
 ALTER TABLE users ADD CONSTRAINT fk_users_assigned_partner
   FOREIGN KEY (assigned_partner_id) REFERENCES admins(id) ON DELETE SET NULL;
 
+-- BANK MANDATES TABLE (for auto-pay e-mandate)
+CREATE TABLE IF NOT EXISTS bank_mandates (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  user_id          INT NOT NULL UNIQUE,
+  subscription_id  VARCHAR(100) NOT NULL UNIQUE,
+  plan_id          VARCHAR(100) DEFAULT NULL,
+  mandate_id       VARCHAR(100) DEFAULT NULL,
+  umrn             VARCHAR(100) DEFAULT NULL,
+  status           ENUM('pending', 'active', 'failed', 'cancelled') DEFAULT 'pending',
+  auth_link        TEXT DEFAULT NULL,
+  payment_mode     VARCHAR(50) DEFAULT NULL,
+  created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- INDEXES
 CREATE INDEX idx_users_mobile           ON users(mobile);
 CREATE INDEX idx_users_is_dsa_partner   ON users(is_dsa_partner);
