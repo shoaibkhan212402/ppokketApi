@@ -30,6 +30,21 @@ const getProfile = async (req, res) => {
       user.kyc_status = 'not_submitted';
     }
     delete user.kyc_doc_status;
+
+    // Load global system settings for fallbacks
+    const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
+    const settings = {};
+    for (const r of settingsRows) {
+      settings[r.setting_key] = r.setting_value;
+    }
+    const defaultFirstEmiPct = parseFloat(settings.first_emi_principal_pct || 25);
+    const defaultProcFeePct = parseFloat(settings.processing_fee_pct || 2);
+
+    user.first_emi_pct = user.custom_first_emi_pct != null ? parseFloat(user.custom_first_emi_pct) : defaultFirstEmiPct;
+    user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
+    user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
+    user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+
     const response = { success: true, user };
     await setCache(cacheKey, response, CACHE_TTL.SHORT);
     res.json(response);
@@ -130,6 +145,21 @@ const updateProfile = async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
     const user = rows[0];
     delete user.password;
+    
+    // Load global system settings for fallbacks
+    const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
+    const settings = {};
+    for (const r of settingsRows) {
+      settings[r.setting_key] = r.setting_value;
+    }
+    const defaultFirstEmiPct = parseFloat(settings.first_emi_principal_pct || 25);
+    const defaultProcFeePct = parseFloat(settings.processing_fee_pct || 2);
+
+    user.first_emi_pct = user.custom_first_emi_pct != null ? parseFloat(user.custom_first_emi_pct) : defaultFirstEmiPct;
+    user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
+    user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
+    user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+
     await invalidateUserCache(req.user.id);
     res.json({ success: true, message: 'Profile updated', user });
   } catch (err) {

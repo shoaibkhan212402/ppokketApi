@@ -33,9 +33,20 @@ app.set('trust proxy', 1);
 app.use(helmet({
   crossOriginResourcePolicy: false,
 }));
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:5173', 'https://ppokket.com', 'https://api.ppokket.com'];
+
 app.use(cors({
-  origin: '*',
-  credentials: false, // credentials:true + wildcard origin is rejected by browsers
+  origin: (origin, callback) => {
+    // allow requests with no origin (like mobile apps, postman, curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    return callback(new Error('CORS Policy: Origin not allowed'));
+  },
+  credentials: true,
 }));
 
 // Global rate limiter
@@ -58,7 +69,7 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(morgan('dev'));
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Static uploads serving
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));

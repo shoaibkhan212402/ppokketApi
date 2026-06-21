@@ -260,4 +260,26 @@ const emiCalculator = async (req, res) => {
   }
 };
 
-module.exports = { applyLoan, getLoanHistory, getLoanDetails, emiCalculator };
+// GET /api/loan/emi-schedule/:id
+const getEmiSchedule = async (req, res) => {
+  try {
+    const loanId = req.params.id;
+    const userId = req.user.id;
+
+    // Ensure the loan belongs to this user
+    const [loan] = await pool.query('SELECT * FROM loans WHERE id = ? AND user_id = ?', [loanId, userId]);
+    if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
+
+    const [schedule] = await pool.query(
+      'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
+      [loanId]
+    );
+
+    res.json({ success: true, schedule });
+  } catch (err) {
+    console.error('[getEmiSchedule]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { applyLoan, getLoanHistory, getLoanDetails, emiCalculator, getEmiSchedule };

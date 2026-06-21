@@ -615,7 +615,7 @@ const reviewKYC = async (req, res) => {
       // ── Compute EMI snapshot at KYC approval time ──────────────────────────
       const sysSettings = await loadSettings();
       const resolvedFeePct = feePct ?? parseFloat(sysSettings.processing_fee_pct) ?? 2;
-      const resolvedFirstEmiPct = firstEmiP ?? 0;
+      const resolvedFirstEmiPct = firstEmiP ?? parseFloat(sysSettings.first_emi_principal_pct) ?? 0;
       const procFee = Math.round(limitVal * resolvedFeePct / 100 * 100) / 100;
 
       const mergedSettings = {
@@ -1024,7 +1024,7 @@ const updateSystemSettings = async (req, res) => {
     const allowed = [
       'default_roi', 'min_loan_amount', 'max_loan_amount', 'min_tenure_months', 'max_tenure_months',
       'default_credit_limit', 'processing_fee_pct', 'processing_fee_in_first_emi', 'gst_on_processing_fee',
-      'first_emi_extra_pct', 'penalty_grace_days', 'penalty_type', 'penalty_rate_per_day',
+      'first_emi_principal_pct', 'first_emi_extra_pct', 'penalty_grace_days', 'penalty_type', 'penalty_rate_per_day',
       'penalty_flat_per_day', 'penalty_max_pct_of_emi', 'gst_on_penalty', 'bounce_charge',
       'gst_on_bounce', 'min_cibil_score',
     ];
