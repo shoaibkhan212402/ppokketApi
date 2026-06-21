@@ -284,25 +284,33 @@ const panVerifyEndpoint = async (req, res) => {
   try {
     const userId = req.user.id;
 
-    let { pan } = req.body;
+    let { pan, name, dob } = req.body;
 
-    if (!pan) {
+    if (!pan || !name || !dob) {
       const [rows] = await pool.query(
-        'SELECT pan_number FROM users WHERE id = ?',
+        'SELECT pan_number, full_name, date_of_birth FROM users WHERE id = ?',
         [userId]
       );
       if (!rows.length) return res.status(404).json({ success: false, message: 'User not found.' });
-      pan = rows[0].pan_number;
+      if (!pan) pan = rows[0].pan_number;
+      if (!name) name = rows[0].full_name;
+      if (!dob && rows[0].date_of_birth) {
+        const dObj = new Date(rows[0].date_of_birth);
+        const day = String(dObj.getDate()).padStart(2, '0');
+        const month = String(dObj.getMonth() + 1).padStart(2, '0');
+        const year = dObj.getFullYear();
+        dob = `${day}/${month}/${year}`;
+      }
     }
 
-    if (!pan) {
+    if (!pan || !name || !dob) {
       return res.status(400).json({
         success: false,
-        message: 'pan is required (or save your PAN in your profile first).'
+        message: 'PAN number, name, and date of birth (DD/MM/YYYY) are required.'
       });
     }
 
-    const result = await verifyPAN({ pan });
+    const result = await verifyPAN({ pan, name, dob });
 
     if (result.verified) {
       // Mark pan_verified and update profile with data returned by API

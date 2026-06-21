@@ -1,25 +1,39 @@
 const axios = require('axios');
 
-const QUICKEKYC_BASE_URL = 'https://api.quickekyc.com/api/v1/pan/pan_advance';
-const QUICKEKYC_API_KEY = process.env.QUICKEKYC_API_KEY || '';
+const APITXT_PAN_URL = 'https://apitxt.com/api/panVerify';
+const AUTH_KEY = () => process.env.APITXT_AUTHKEY || '';
 
 /**
- * Parse "DD-MM-YYYY" (quickekyc format) to "YYYY-MM-DD" for MySQL.
+ * Convert "DD/MM/YYYY" to "YYYY-MM-DD" for MySQL.
  */
-const parseDobToMySQL = (dob) => {
-  if (!dob) return null;
-  const parts = String(dob).trim().split('-');
+const convertDobToMySQL = (dobStr) => {
+  if (!dobStr) return null;
+  const parts = String(dobStr).trim().split('/');
   if (parts.length !== 3) return null;
   const [d, m, y] = parts;
   if (!d || !m || !y || y.length !== 4) return null;
-  return `${y}-${m}-${d}`;
+  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+};
+
+const APITXT_PAN_ERRORS = {
+  105: 'Missing Authentication Key.',
+  106: 'Missing PAN number.',
+  107: 'Missing name (as per PAN).',
+  108: 'Missing date of birth.',
+  206: 'Invalid PAN. Format must be ABCDE1234F.',
+  207: 'Invalid date of birth. Format must be DD/MM/YYYY.',
+  301: 'Insufficient wallet balance. Please recharge your API account.',
+  304: 'Invalid Authentication Key or IP Restricted.',
+  310: 'Verification failed (vendor error). Please try again.',
 };
 
 /**
- * Fetch PAN holder details from quickekyc.com pan_advance endpoint.
+ * Verify PAN card via APItxt PAN Verification API
  *
  * @param {Object} params
- * @param {string} params.pan - 10-character PAN (e.g. ABCDE1234F)
+ * @param {string} params.pan
+ * @param {string} params.name
+ * @param {string} params.dob
  *
  * @returns {Promise<{
  *   success: boolean,
@@ -33,129 +47,168 @@ const parseDobToMySQL = (dob) => {
  *   mobileNo: string|null,
  *   email: string|null,
  *   address: Object|null,
- *   requestId: number|null,
+ *   requestId: string|null,
  *   message: string|null,
  *   raw: Object
  * }>}
  */
-const verifyPAN = async ({ pan }) => {
-  const apiKey = QUICKEKYC_API_KEY;
-  if (!apiKey) {
-    throw new Error('QUICKEKYC_API_KEY is not configured in .env');
+const verifyPAN = async ({ pan, name, dob }) => {
+  const authKey = AUTH_KEY();
+  const panClean = (pan || '').trim().toUpperCase();
+  const nameClean = (name || '').trim();
+  const dobClean = (dob || '').trim();
+
+  if (!panClean) {
+    return {
+      success: false, verified: false,
+      message: 'PAN number is required.', errorCode: 106,
+    };
+  }
+  if (!nameClean) {
+    return {
+      success: false, verified: false,
+      message: 'Name is required as printed on the PAN card.', errorCode: 107,
+    };
+  }
+  if (!dobClean) {
+    return {
+      success: false, verified: false,
+      message: 'Date of birth is required.', errorCode: 108,
+    };
   }
 
-  const panClean = (pan || '').trim().toUpperCase();
-  if (!panClean) throw new Error('PAN number is required for verification.');
+  // Basic client-side validation
+  if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panClean)) {
+    return {
+      success: false, verified: false,
+      message: 'Invalid PAN format. Must be in the format ABCDE1234F.', errorCode: 206,
+    };
+  }
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(dobClean)) {
+    return {
+      success: false, verified: false,
+      message: 'Invalid date of birth format. Must be DD/MM/YYYY.', errorCode: 207,
+    };
+  }
 
-  let rawResponse;
+  if (!authKey) {
+    if (process.env.NODE_ENV === 'production') {
+      return {
+        success: false, verified: false,
+        message: 'PAN Verification Authentication Key is not configured.',
+        errorCode: 105,
+      };
+    }
+    // Sandbox / Mock fallback in development mode
+    return {
+      success: true,
+      verified: true,
+      panNumber: panClean,
+      fullName: nameClean.toUpperCase(),
+      category: 'individual',
+      dob: dobClean,
+      dobMySQL: convertDobToMySQL(dobClean),
+      gender: 'M',
+      mobileNo: null,
+      email: null,
+      address: null,
+      requestId: `PAN-VER-MOCK-${Date.now()}`,
+      message: 'PAN verified successfully (Mock).',
+      errorCode: null,
+      raw: { mock: true },
+    };
+  }
+
+  let raw;
   try {
     const response = await axios.post(
-      QUICKEKYC_BASE_URL,
-      { key: apiKey, id_number: panClean },
-      { headers: { 'Content-Type': 'application/json' }, timeout: 15000 }
+      APITXT_PAN_URL,
+      {
+        authkey: authKey,
+        pan: panClean,
+        name: nameClean,
+        dob: dobClean,
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 20000 }
     );
-    rawResponse = response.data;
+    raw = response.data;
   } catch (err) {
-    const statusCode = err.response?.status;
-    const apiBody = err.response?.data;
-    console.error('[PAN Verify] HTTP error:', statusCode, apiBody || err.message);
-
+    console.error('[PAN Verify] HTTP error:', err.message);
     if (process.env.NODE_ENV === 'development') {
+      console.warn('[PAN Verify] Falling back to mock data in development.');
       return {
         success: true,
         verified: true,
         panNumber: panClean,
-        fullName: 'MOCK USER',
+        fullName: nameClean.toUpperCase(),
         category: 'individual',
-        dob: '01-01-1990',
-        dobMySQL: '1990-01-01',
+        dob: dobClean,
+        dobMySQL: convertDobToMySQL(dobClean),
         gender: 'M',
         mobileNo: null,
         email: null,
         address: null,
-        requestId: `PAN-MOCK-${Date.now()}`,
-        message: null,
+        requestId: `PAN-VER-MOCK-${Date.now()}`,
+        message: 'PAN verified successfully (Mock).',
+        errorCode: null,
         raw: { mock: true, error: err.message },
       };
     }
-    throw new Error('PAN verification service is temporarily unavailable. Please try again later.');
+    throw new Error('PAN verification service temporarily unavailable. Please try again later.');
   }
 
-  const statusCode = rawResponse?.status_code;
-  const status = rawResponse?.status;
-  const data = rawResponse?.data || {};
-  const requestId = rawResponse?.request_id || null;
-
-  if (statusCode !== 200 || status !== 'success') {
-    const errorMsg = rawResponse?.message || `PAN verification failed (code: ${statusCode})`;
+  if (raw?.status !== 200 || raw?.message !== 'success') {
+    const errDesc = APITXT_PAN_ERRORS[raw?.status] || raw?.message || `API error ${raw?.status}`;
 
     if (process.env.NODE_ENV === 'development') {
+      console.warn('[PAN Verify] API returned non-200. Falling back to mock data in development:', errDesc);
       return {
         success: true,
         verified: true,
         panNumber: panClean,
-        fullName: 'MOCK USER',
+        fullName: nameClean.toUpperCase(),
         category: 'individual',
-        dob: '01-01-1990',
-        dobMySQL: '1990-01-01',
+        dob: dobClean,
+        dobMySQL: convertDobToMySQL(dobClean),
         gender: 'M',
         mobileNo: null,
         email: null,
         address: null,
-        requestId: requestId || `PAN-MOCK-${Date.now()}`,
-        message: null,
-        raw: rawResponse,
+        requestId: `PAN-VER-MOCK-${Date.now()}`,
+        message: 'PAN verified successfully (Mock).',
+        errorCode: null,
+        raw: { mock: true, error: errDesc },
       };
     }
 
     return {
-      success: false,
-      verified: false,
-      panNumber: null,
-      fullName: null,
-      category: null,
-      dob: null,
-      dobMySQL: null,
-      gender: null,
-      mobileNo: null,
-      email: null,
-      address: null,
-      requestId,
-      message: errorMsg,
-      raw: rawResponse,
+      success: false, verified: false,
+      panNumber: null, fullName: null, category: null, dob: null, dobMySQL: null,
+      gender: null, mobileNo: null, email: null, address: null,
+      requestId: raw?.request_id || null, message: errDesc,
+      errorCode: raw?.status || null, raw,
     };
   }
 
-  const dobMySQL = parseDobToMySQL(data.dob);
-
-  const address = {
-    line1: data.address_line_1 || null,
-    line2: data.address_line_2 || null,
-    line3: data.address_line_3 || null,
-    line4: data.address_line_4 || null,
-    line5: data.address_line_5 || null,
-    subDist: data.sub_dist || null,
-    dist: data.dist || null,
-    state: data.state || null,
-    pincode: data.pincode || null,
-  };
+  const d = raw?.data || {};
 
   return {
     success: true,
-    verified: true,
-    panNumber: data.pan_number || panClean,
-    fullName: data.full_name || null,
-    category: data.category || null,
-    dob: data.dob || null,
-    dobMySQL,
-    gender: data.gender || null,
-    mobileNo: data.mobile_no || null,
-    email: data.email || null,
-    address,
-    requestId,
-    message: null,
-    raw: rawResponse,
+    verified: !!d.verified,
+    panNumber: d.pan || panClean,
+    fullName: d.full_name || nameClean.toUpperCase(),
+    category: d.category || 'individual',
+    dob: dobClean,
+    dobMySQL: convertDobToMySQL(dobClean),
+    gender: null,
+    mobileNo: null,
+    email: null,
+    address: null,
+    requestId: raw.request_id || null,
+    message: d.message || null,
+    errorCode: null,
+    raw,
   };
 };
 
-module.exports = { verifyPAN, parseDobToMySQL };
+module.exports = { verifyPAN, parseDobToMySQL: convertDobToMySQL };
