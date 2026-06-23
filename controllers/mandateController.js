@@ -54,7 +54,7 @@ const createMandate = async (req, res) => {
 
     if (config.isMock) {
       // Mock Mandate Creation
-      const mockAuthLink = `${req.headers.origin || 'http://localhost:5173'}/profile?tab=Auto+Pay&mock_auth=success&sub_id=${subscriptionId}`;
+      const mockAuthLink = `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Auto+Pay&mock_auth=success&sub_id=${subscriptionId}`;
 
       // Insert or update mandate in database
       if (existing.length) {
@@ -131,7 +131,7 @@ const createMandate = async (req, res) => {
         customerEmail: user.email || 'customer@ppokket.com',
         authAmount: 1.00,
         expiresOn: formattedExpiry,
-        returnUrl: `${req.headers.origin || 'http://localhost:5173'}/profile?tab=Auto+Pay&sub_id={subscription_id}`,
+        returnUrl: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Auto+Pay&sub_id={subscription_id}`,
         notificationChannels: ['SMS', 'EMAIL']
       })
     });
@@ -215,8 +215,19 @@ const verifyMandate = async (req, res) => {
       });
     }
 
-    // Call Cashfree API to verify subscription status
-    const verifyUrl = `${config.baseUrl}/api/v2/subscriptions/${mandate.subscription_id}`;
+    // Cashfree v2 GET endpoint uses the numeric subReferenceId — NOT our custom subscriptionId string.
+    // If mandate_id (subReferenceId) was never captured, the old record is unusable; clear it so the
+    // user can re-register and we capture subReferenceId this time.
+    if (!mandate.mandate_id) {
+      await pool.query('DELETE FROM bank_mandates WHERE user_id = ?', [userId]);
+      return res.status(400).json({
+        success: false,
+        message: 'Your previous mandate setup was incomplete. Please click "Set Up Auto-Pay" again to re-register.',
+        require_reregister: true
+      });
+    }
+
+    const verifyUrl = `${config.baseUrl}/api/v2/subscriptions/${mandate.mandate_id}`;
     const subRes = await fetch(verifyUrl, {
       method: 'GET',
       headers: {
@@ -229,6 +240,15 @@ const verifyMandate = async (req, res) => {
 
     if (subRes.status !== 200) {
       console.error('[verifyMandate] Cashfree Get Subscription details failed:', subData);
+
+      // Specific case: subReferenceId not yet assigned (subscription still pending auth)
+      if (subData.detail?.includes('subReferenceId') || subData.message?.includes('subReferenceId')) {
+        return res.status(400).json({
+          success: false,
+          message: 'Mandate verification pending — please complete the bank authorisation and try again.'
+        });
+      }
+
       return res.status(400).json({
         success: false,
         message: subData.message || 'Failed to verify mandate status from Cashfree.'
@@ -246,12 +266,13 @@ const verifyMandate = async (req, res) => {
       localStatus = 'failed';
     }
 
-    // Update database status
+    // Update database status — also persist subReferenceId if we now have it
+    const newMandateId = subData.subReferenceId || mandate.mandate_id || null;
     await pool.query(
       `UPDATE bank_mandates SET
-        status = ?, umrn = ?, payment_mode = ?
+        status = ?, umrn = ?, payment_mode = ?, mandate_id = COALESCE(?, mandate_id)
        WHERE user_id = ?`,
-      [localStatus, subData.umrn || mandate.umrn || null, subData.paymentMode || mandate.payment_mode || null, userId]
+      [localStatus, subData.umrn || mandate.umrn || null, subData.paymentMode || mandate.payment_mode || null, newMandateId, userId]
     );
 
     if (localStatus === 'active' && mandate.status !== 'active') {

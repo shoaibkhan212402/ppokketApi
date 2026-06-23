@@ -49,7 +49,7 @@ const createOrder = async (req, res) => {
             customer_name: user.full_name || 'Customer'
           },
           order_meta: {
-            return_url: `${req.headers.origin || 'http://localhost:5173'}/profile?tab=Loan+History&order_id={order_id}`
+            return_url: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Loan+History&order_id={order_id}`
           }
         }, {
           headers: {

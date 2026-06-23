@@ -133,7 +133,10 @@ const getLoanHistory = async (req, res) => {
     if (cached) return res.json(cached);
 
     const [loans] = await pool.query(
-      'SELECT * FROM loans WHERE user_id = ? ORDER BY created_at DESC',
+      `SELECT l.*,
+        (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date,
+        (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount
+       FROM loans l WHERE l.user_id = ? ORDER BY l.created_at DESC`,
       [req.user.id]
     );
     const response = { success: true, loans };
