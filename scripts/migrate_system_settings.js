@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS = [
 
   // ── Processing fee ───────────────────────────────────────────
   ['processing_fee_pct',          '2'],     // % of loan amount
-  ['processing_fee_in_first_emi', 'true'],  // add fee + GST to EMI #1
+  ['processing_fee_in_first_emi', 'false'],  // do not add fee + GST to EMI #1 (deducted during disbursal)
   ['gst_on_processing_fee',       '18'],    // % GST on processing fee
 
   // ── First EMI step-down ──────────────────────────────────────

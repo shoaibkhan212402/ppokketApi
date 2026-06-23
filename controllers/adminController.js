@@ -783,7 +783,23 @@ const disburseLoan = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Disbursement failed: User has not updated bank details.' });
     }
 
-    const payoutAmount = parseFloat(loan.amount);
+    let payoutAmount = parseFloat(loan.amount);
+    let feeDeductionMsg = '';
+    if (!loan.processing_fee_in_first_emi) {
+      // Get system settings for GST
+      const [settingsRows] = await conn.query('SELECT setting_key, setting_value FROM system_settings');
+      const settings = {};
+      for (const r of settingsRows) {
+        settings[r.setting_key] = r.setting_value;
+      }
+      const gstPct = parseFloat(settings.gst_on_processing_fee || 18);
+      const procFee = parseFloat(loan.processing_fee || 0);
+      const feeGst = Math.round(procFee * (gstPct / 100) * 100) / 100;
+      const totalDeduction = procFee + feeGst;
+      payoutAmount = Math.max(0, payoutAmount - totalDeduction);
+      feeDeductionMsg = ` (Deducted processing fee: ₹${procFee} + GST: ₹${feeGst})`;
+    }
+
     const mockUTR = 'PAYOUT' + crypto.randomBytes(6).toString('hex').toUpperCase();
 
     // All three writes are atomic — if any fails, the whole transaction rolls back
@@ -802,7 +818,7 @@ const disburseLoan = async (req, res) => {
        VALUES (?, ?, ?, 'credit', 'success', ?, ?)`,
       [
         userId, loanId, payoutAmount,
-        `Loan disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}`,
+        `Loan disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}${feeDeductionMsg}`,
         `UTR: ${mockUTR}`,
       ]
     );
@@ -810,7 +826,7 @@ const disburseLoan = async (req, res) => {
     await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [userId, '💰 Loan Disbursed!',
-        `₹${payoutAmount} disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}. UTR: ${mockUTR}`,
+        `₹${payoutAmount} disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}. UTR: ${mockUTR}.${feeDeductionMsg}`,
         'loan']
     );
 

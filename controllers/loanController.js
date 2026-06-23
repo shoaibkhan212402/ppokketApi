@@ -154,10 +154,14 @@ const getLoanDetails = async (req, res) => {
     );
     if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
 
-    const [emiSchedule] = await pool.query(
-      'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no',
-      [req.params.id]
-    );
+    let emiSchedule = [];
+    if (loan[0].status === 'disbursed') {
+      const [rows] = await pool.query(
+        'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no',
+        [req.params.id]
+      );
+      emiSchedule = rows;
+    }
     const [transactions] = await pool.query(
       'SELECT * FROM transactions WHERE loan_id = ? ORDER BY created_at DESC',
       [req.params.id]
@@ -270,10 +274,14 @@ const getEmiSchedule = async (req, res) => {
     const [loan] = await pool.query('SELECT * FROM loans WHERE id = ? AND user_id = ?', [loanId, userId]);
     if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
 
-    const [schedule] = await pool.query(
-      'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
-      [loanId]
-    );
+    let schedule = [];
+    if (loan[0].status === 'disbursed') {
+      const [rows] = await pool.query(
+        'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
+        [loanId]
+      );
+      schedule = rows;
+    }
 
     res.json({ success: true, schedule });
   } catch (err) {

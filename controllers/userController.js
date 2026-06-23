@@ -90,7 +90,11 @@ const updateProfile = async (req, res) => {
             if (referrerFcmToken) {
               await sendNotification(referrerFcmToken, title, message, { screen: 'Referrals' });
             }
+          } else {
+            return res.status(400).json({ success: false, message: 'You cannot refer yourself.' });
           }
+        } else {
+          return res.status(400).json({ success: false, message: 'Invalid referral code.' });
         }
       }
     }
@@ -301,9 +305,13 @@ const getDashboard = async (req, res) => {
     const [activeLoan] = await pool.query(
       'SELECT * FROM loans WHERE user_id = ? AND status IN ("disbursed","approved") ORDER BY created_at DESC LIMIT 1', [userId]
     );
-    const [nextEmi] = await pool.query(
-      'SELECT * FROM emi_schedule WHERE user_id = ? AND status = "upcoming" ORDER BY due_date ASC LIMIT 1', [userId]
-    );
+    let nextEmiRow = null;
+    if (activeLoan.length && activeLoan[0].status === 'disbursed') {
+      const [nextEmi] = await pool.query(
+        'SELECT * FROM emi_schedule WHERE user_id = ? AND status = "upcoming" ORDER BY due_date ASC LIMIT 1', [userId]
+      );
+      nextEmiRow = nextEmi[0] || null;
+    }
     const [recentTxn] = await pool.query(
       'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId]
     );
@@ -316,7 +324,7 @@ const getDashboard = async (req, res) => {
         ...userRows[0],
         kyc_status,
         active_loan: activeLoan[0] || null,
-        next_emi: nextEmi[0] || null,
+        next_emi: nextEmiRow,
         recent_transactions: recentTxn,
         unread_notifications: unreadNotif[0]?.count || 0,
       }

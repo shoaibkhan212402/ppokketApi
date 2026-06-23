@@ -126,7 +126,11 @@ const handleVerifyAndLogin = async (mobile, otp, res, referralCode = null) => {
         'SELECT id FROM users WHERE referral_code = ?',
         [referralCode.trim().toUpperCase()]
       );
-      if (refRows.length) referrerId = refRows[0].id;
+      if (refRows.length) {
+        referrerId = refRows[0].id;
+      } else {
+        return res.status(400).json({ success: false, message: 'Invalid referral code.' });
+      }
     }
 
     const [result] = await pool.query(
@@ -161,6 +165,40 @@ const handleVerifyAndLogin = async (mobile, otp, res, referralCode = null) => {
     if (user.full_name === 'Ppokket User' || !user.email) {
       isNewUser = true;
     }
+
+    // Resolve referrer if a referral code was provided and user doesn't have a referrer yet
+    if (referralCode && user.referred_by === null) {
+      const [refRows] = await pool.query(
+        'SELECT id FROM users WHERE referral_code = ?',
+        [referralCode.trim().toUpperCase()]
+      );
+      if (refRows.length) {
+        const referrerId = refRows[0].id;
+        if (referrerId !== user.id) {
+          // Update referred_by
+          await pool.query('UPDATE users SET referred_by = ? WHERE id = ?', [referrerId, user.id]);
+          // Create referral record
+          await pool.query(
+            'INSERT IGNORE INTO referrals (referrer_id, referred_id) VALUES (?, ?)',
+            [referrerId, user.id]
+          );
+          // In-app notification for referrer
+          await pool.query(
+            'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+            [referrerId, '👥 New Referral!',
+             `${user.full_name || 'A new user'} joined Ppokket using your referral code. You will earn a credit limit bonus once they complete KYC.`,
+             'promo']
+          );
+          // Update local user object referred_by so it matches database
+          user.referred_by = referrerId;
+        } else {
+          return res.status(400).json({ success: false, message: 'You cannot refer yourself.' });
+        }
+      } else {
+        return res.status(400).json({ success: false, message: 'Invalid referral code.' });
+      }
+    }
+
     await pool.query('UPDATE users SET updated_at = NOW() WHERE id = ?', [user.id]);
   }
 

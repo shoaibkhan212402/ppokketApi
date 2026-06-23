@@ -14,9 +14,9 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'loan_id and amount required' });
     }
 
-    // Verify loan belongs to user and is active (disbursed or approved with EMI schedule)
+    // Verify loan belongs to user and is active (disbursed)
     const [loan] = await pool.query(
-      'SELECT * FROM loans WHERE id = ? AND user_id = ? AND status IN ("disbursed", "approved")',
+      'SELECT * FROM loans WHERE id = ? AND user_id = ? AND status = "disbursed"',
       [loan_id, userId]
     );
     if (!loan.length) {
