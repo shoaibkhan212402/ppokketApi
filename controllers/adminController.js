@@ -110,7 +110,7 @@ const getAllUsers = async (req, res) => {
               u.custom_processing_fee_pct, u.custom_first_emi_pct,
               u.kyc_approved_tenure, u.kyc_first_emi_amount, u.kyc_regular_emi_amount,
               u.assigned_partner_id, a.name as assigned_partner_name, a.role as assigned_partner_role,
-              u.lead_status,
+              u.lead_status, u.dsa_custom_status,
               k.status as kyc_status, k.pan_verified as kyc_pan_verified, k.aadhaar_verified as kyc_aadhaar_verified,
               k.rejection_reason as kyc_rejection_reason
        FROM users u
@@ -152,8 +152,8 @@ const VALID_LEAD_STATUSES = ['new', 'contacted', 'docs_submitted', 'kyc_pending'
 const updateLeadStatus = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { lead_status } = req.body;
-    if (!VALID_LEAD_STATUSES.includes(lead_status)) {
+    const { lead_status, dsa_custom_status } = req.body;
+    if (lead_status && !VALID_LEAD_STATUSES.includes(lead_status)) {
       return res.status(400).json({ success: false, message: 'Invalid lead status value' });
     }
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
@@ -161,8 +161,15 @@ const updateLeadStatus = async (req, res) => {
       const [[lead]] = await pool.query('SELECT id FROM users WHERE id = ? AND assigned_partner_id = ?', [userId, req.admin.id]);
       if (!lead) return res.status(403).json({ success: false, message: 'This lead is not assigned to you' });
     }
-    await pool.query('UPDATE users SET lead_status = ? WHERE id = ?', [lead_status, userId]);
-    res.json({ success: true, message: 'Lead status updated', lead_status });
+    
+    if (lead_status !== undefined && dsa_custom_status !== undefined) {
+      await pool.query('UPDATE users SET lead_status = ?, dsa_custom_status = ? WHERE id = ?', [lead_status, dsa_custom_status, userId]);
+    } else if (lead_status !== undefined) {
+      await pool.query('UPDATE users SET lead_status = ? WHERE id = ?', [lead_status, userId]);
+    } else if (dsa_custom_status !== undefined) {
+      await pool.query('UPDATE users SET dsa_custom_status = ? WHERE id = ?', [dsa_custom_status, userId]);
+    }
+    res.json({ success: true, message: 'Lead status updated', lead_status, dsa_custom_status });
   } catch (err) {
     console.error('[updateLeadStatus]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -188,7 +195,7 @@ const getLeadKycDetails = async (req, res) => {
               kd.reviewed_at,
               u.pan_number, u.aadhaar_number, u.pan_verified as user_pan_verified,
               u.aadhaar_verified as user_aadhaar_verified, u.is_kyc_verified,
-              u.date_of_birth, u.occupation, u.monthly_income
+              u.date_of_birth, u.occupation, u.monthly_income, u.dsa_custom_status
          FROM users u
          LEFT JOIN kyc_documents kd ON kd.user_id = u.id
         WHERE u.id = ?`,

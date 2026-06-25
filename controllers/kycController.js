@@ -221,7 +221,7 @@ const autoVerifyKYC = async (req, res) => {
     if (!kyc.aadhaar_front || !kyc.aadhaar_back || !kyc.selfie || !kyc.bank_passbook) {
       return res.status(400).json({
         success: false,
-        message: 'All KYC documents (Aadhaar Front, Aadhaar Back, Selfie, Bank Passbook) are required.',
+        message: 'All KYC documents (Aadhaar Front, Aadhaar Back, Selfie, Bank Statement of 3 months) are required.',
       });
     }
 
@@ -311,6 +311,23 @@ const panVerifyEndpoint = async (req, res) => {
     }
 
     const result = await verifyPAN({ pan, name, dob });
+
+    if (result.success && result.verified) {
+      if (result.name_match === false) {
+        return res.status(400).json({
+          success: false,
+          verified: false,
+          message: 'Name is incorrect as per PAN records.'
+        });
+      }
+      if (result.dob_match === false) {
+        return res.status(400).json({
+          success: false,
+          verified: false,
+          message: 'Date of Birth is incorrect as per PAN records.'
+        });
+      }
+    }
 
     if (result.verified) {
       // Mark pan_verified and update profile with data returned by API

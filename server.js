@@ -34,8 +34,15 @@ app.use(helmet({
   crossOriginResourcePolicy: false,
 }));
 const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['http://localhost:5173', 'https://ppokket.com', 'https://api.ppokket.com'];
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : [
+      'http://localhost:5173',
+      'http://localhost:5174',
+      'https://ppokket.com',
+      'https://www.ppokket.com',
+      'https://admin.ppokket.com',
+      'https://api.ppokket.com',
+    ];
 
 app.use(cors({
   origin: (origin, callback) => {

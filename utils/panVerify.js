@@ -103,6 +103,8 @@ const verifyPAN = async ({ pan, name, dob }) => {
     return {
       success: true,
       verified: true,
+      name_match: true,
+      dob_match: true,
       panNumber: panClean,
       fullName: nameClean.toUpperCase(),
       category: 'individual',
@@ -139,6 +141,8 @@ const verifyPAN = async ({ pan, name, dob }) => {
       return {
         success: true,
         verified: true,
+        name_match: true,
+        dob_match: true,
         panNumber: panClean,
         fullName: nameClean.toUpperCase(),
         category: 'individual',
@@ -165,6 +169,8 @@ const verifyPAN = async ({ pan, name, dob }) => {
       return {
         success: true,
         verified: true,
+        name_match: true,
+        dob_match: true,
         panNumber: panClean,
         fullName: nameClean.toUpperCase(),
         category: 'individual',
@@ -195,6 +201,8 @@ const verifyPAN = async ({ pan, name, dob }) => {
   return {
     success: true,
     verified: !!d.verified,
+    name_match: d.name_match,
+    dob_match: d.dob_match,
     panNumber: d.pan || panClean,
     fullName: d.full_name || nameClean.toUpperCase(),
     category: d.category || 'individual',

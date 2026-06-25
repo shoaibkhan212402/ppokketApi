@@ -242,6 +242,35 @@ const verifyBankDetails = async (req, res) => {
       });
     }
 
+    // Verify IFSC code
+    const verifyIfsc = (verifyRes.ifsc || '').trim().toUpperCase();
+    if (verifyIfsc !== cleanIfsc) {
+      return res.status(400).json({
+        success: false,
+        message: 'IFSC code does not match bank records.'
+      });
+    }
+
+    // Verify Account Number
+    const verifyAcc = (verifyRes.accountNumber || '').trim().replace(/[\s-]/g, '');
+    const enteredAcc = cleanAcc.replace(/[\s-]/g, '');
+    if (verifyAcc !== enteredAcc) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account number does not match bank records.'
+      });
+    }
+
+    // Verify Account Holder Name (Case-insensitive matching)
+    const verifyName = (verifyRes.nameAtBank || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const enteredName = account_holder.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (verifyName !== enteredName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account holder name does not match bank records.'
+      });
+    }
+
     const finalHolderName = verifyRes.nameAtBank || account_holder.trim();
 
     // Save/Update with is_verified = 1

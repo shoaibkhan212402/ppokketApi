@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
   is_dsa_partner    TINYINT(1) DEFAULT 0,
   assigned_partner_id INT DEFAULT NULL,
   lead_status       ENUM('new','contacted','docs_submitted','kyc_pending','kyc_done','loan_applied','converted','inactive') DEFAULT 'new',
+  dsa_custom_status VARCHAR(255) DEFAULT NULL,
   dark_mode         TINYINT(1) DEFAULT 0,
   language          VARCHAR(10) DEFAULT 'en',
   created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
