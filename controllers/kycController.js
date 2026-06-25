@@ -310,23 +310,50 @@ const panVerifyEndpoint = async (req, res) => {
       });
     }
 
+    // ── Our own PAN structure check (IT-dept rule: 5th char = surname initial) ──
+    const panUpper = pan.trim().toUpperCase();
+    const nameParts = name.trim().toUpperCase().split(/\s+/).filter(Boolean);
+    const panFifthChar = panUpper.charAt(4);
+    const surnameInitial = nameParts.length > 0 ? nameParts[nameParts.length - 1].charAt(0) : '';
+    if (panFifthChar !== surnameInitial) {
+      return res.status(400).json({
+        success: false, verified: false,
+        message: `PAN structure mismatch: the 5th character of PAN (${panFifthChar}) must match the first letter of your surname (${surnameInitial}). Please check your PAN number and name.`,
+      });
+    }
+
     const result = await verifyPAN({ pan, name, dob });
 
-    if (result.success && result.verified) {
-      if (result.name_match === false) {
-        return res.status(400).json({
-          success: false,
-          verified: false,
-          message: 'Name is incorrect as per PAN records.'
-        });
-      }
-      if (result.dob_match === false) {
-        return res.status(400).json({
-          success: false,
-          verified: false,
-          message: 'Date of Birth is incorrect as per PAN records.'
-        });
-      }
+    // Step 1 — PAN must exist and be verified by the authority
+    if (!result.success || !result.verified) {
+      return res.status(400).json({
+        success: false, verified: false,
+        message: result.message || 'PAN not found or could not be verified. Please check the PAN number.',
+      });
+    }
+
+    // Step 2 — PAN must be active/valid (not deactivated or surrendered)
+    if (result.panStatus && result.panStatus !== 'valid') {
+      return res.status(400).json({
+        success: false, verified: false,
+        message: `PAN is not active (status: ${result.panStatus}). Please use a valid active PAN card.`,
+      });
+    }
+
+    // Step 3 — Name must match PAN records
+    if (result.name_match !== true) {
+      return res.status(400).json({
+        success: false, verified: false,
+        message: 'Name does not match PAN records. Enter your name exactly as printed on your PAN card.',
+      });
+    }
+
+    // Step 4 — Date of Birth must match PAN records
+    if (result.dob_match !== true) {
+      return res.status(400).json({
+        success: false, verified: false,
+        message: 'Date of Birth does not match PAN records. Ensure it exactly matches your PAN card.',
+      });
     }
 
     if (result.verified) {

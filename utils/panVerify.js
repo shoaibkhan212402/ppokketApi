@@ -92,32 +92,10 @@ const verifyPAN = async ({ pan, name, dob }) => {
   }
 
   if (!authKey) {
-    if (process.env.NODE_ENV === 'production') {
-      return {
-        success: false, verified: false,
-        message: 'PAN Verification Authentication Key is not configured.',
-        errorCode: 105,
-      };
-    }
-    // Sandbox / Mock fallback in development mode
     return {
-      success: true,
-      verified: true,
-      name_match: true,
-      dob_match: true,
-      panNumber: panClean,
-      fullName: nameClean.toUpperCase(),
-      category: 'individual',
-      dob: dobClean,
-      dobMySQL: convertDobToMySQL(dobClean),
-      gender: 'M',
-      mobileNo: null,
-      email: null,
-      address: null,
-      requestId: `PAN-VER-MOCK-${Date.now()}`,
-      message: 'PAN verified successfully (Mock).',
-      errorCode: null,
-      raw: { mock: true },
+      success: false, verified: false,
+      message: 'PAN Verification service is not configured. Please contact support.',
+      errorCode: 105,
     };
   }
 
@@ -136,56 +114,11 @@ const verifyPAN = async ({ pan, name, dob }) => {
     raw = response.data;
   } catch (err) {
     console.error('[PAN Verify] HTTP error:', err.message);
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('[PAN Verify] Falling back to mock data in development.');
-      return {
-        success: true,
-        verified: true,
-        name_match: true,
-        dob_match: true,
-        panNumber: panClean,
-        fullName: nameClean.toUpperCase(),
-        category: 'individual',
-        dob: dobClean,
-        dobMySQL: convertDobToMySQL(dobClean),
-        gender: 'M',
-        mobileNo: null,
-        email: null,
-        address: null,
-        requestId: `PAN-VER-MOCK-${Date.now()}`,
-        message: 'PAN verified successfully (Mock).',
-        errorCode: null,
-        raw: { mock: true, error: err.message },
-      };
-    }
     throw new Error('PAN verification service temporarily unavailable. Please try again later.');
   }
 
   if (raw?.status !== 200 || raw?.message !== 'success') {
     const errDesc = APITXT_PAN_ERRORS[raw?.status] || raw?.message || `API error ${raw?.status}`;
-
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('[PAN Verify] API returned non-200. Falling back to mock data in development:', errDesc);
-      return {
-        success: true,
-        verified: true,
-        name_match: true,
-        dob_match: true,
-        panNumber: panClean,
-        fullName: nameClean.toUpperCase(),
-        category: 'individual',
-        dob: dobClean,
-        dobMySQL: convertDobToMySQL(dobClean),
-        gender: 'M',
-        mobileNo: null,
-        email: null,
-        address: null,
-        requestId: `PAN-VER-MOCK-${Date.now()}`,
-        message: 'PAN verified successfully (Mock).',
-        errorCode: null,
-        raw: { mock: true, error: errDesc },
-      };
-    }
 
     return {
       success: false, verified: false,
@@ -201,17 +134,14 @@ const verifyPAN = async ({ pan, name, dob }) => {
   return {
     success: true,
     verified: !!d.verified,
-    name_match: d.name_match,
-    dob_match: d.dob_match,
+    panStatus: d.status || null,      // e.g. "valid" | "invalid" | "deactivated"
+    name_match: d.name_match,         // true | false | null
+    dob_match: d.dob_match,           // true | false | null
     panNumber: d.pan || panClean,
-    fullName: d.full_name || nameClean.toUpperCase(),
+    fullName: d.full_name || null,    // only from API — never fall back to submitted name
     category: d.category || 'individual',
     dob: dobClean,
     dobMySQL: convertDobToMySQL(dobClean),
-    gender: null,
-    mobileNo: null,
-    email: null,
-    address: null,
     requestId: raw.request_id || null,
     message: d.message || null,
     errorCode: null,

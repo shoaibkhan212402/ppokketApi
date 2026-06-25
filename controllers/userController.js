@@ -1,7 +1,7 @@
 const { pool } = require('../config/db');
 const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { sendNotification } = require('../utils/fcm');
-const { verifyBankAccount } = require('../utils/bankVerify');
+const { verifyBankAccount, verifyIFSC, compareName } = require('../utils/bankVerify');
 
 // GET /api/user/profile
 const getProfile = async (req, res) => {
@@ -12,6 +12,8 @@ const getProfile = async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT u.*, bd.account_holder, bd.account_number, bd.ifsc_code, bd.bank_name, bd.account_type, bd.is_verified as bank_verified,
+              bd.ifsc_bank_name, bd.branch, bd.branch_address, bd.city, bd.state,
+              bd.micr, bd.swift, bd.contact, bd.neft, bd.rtgs, bd.imps, bd.upi, bd.ifsc_verified,
               k.status as kyc_doc_status
        FROM users u
        LEFT JOIN bank_details bd ON bd.user_id = u.id
@@ -235,92 +237,159 @@ const verifyBankDetails = async (req, res) => {
   try {
     const { account_holder, account_number, ifsc_code, bank_name, account_type } = req.body;
     const userId = req.user.id;
-    
-    if (!account_holder || !account_number || !ifsc_code || !bank_name) {
-      return res.status(400).json({ success: false, message: 'All fields are required for bank verification.' });
+
+    // ── Step 0: All fields present ───────────────────────────────────────────
+    if (!account_holder?.trim()) {
+      return res.status(400).json({ success: false, field: 'holder', message: 'Account holder name is required.' });
+    }
+    if (!account_number?.trim()) {
+      return res.status(400).json({ success: false, field: 'account', message: 'Account number is required.' });
+    }
+    if (!ifsc_code?.trim()) {
+      return res.status(400).json({ success: false, field: 'ifsc', message: 'IFSC code is required.' });
+    }
+    if (!bank_name?.trim()) {
+      return res.status(400).json({ success: false, field: 'bankName', message: 'Bank name is required.' });
     }
 
-    const cleanAcc = account_number.trim();
-    if (!/^\d{9,18}$/.test(cleanAcc)) {
-      return res.status(400).json({ success: false, message: 'Invalid bank account number. Must be between 9 and 18 digits.' });
-    }
-
+    // ── Step 1: Format validation ────────────────────────────────────────────
+    const cleanAcc  = account_number.trim().replace(/[\s-]/g, '');
     const cleanIfsc = ifsc_code.trim().toUpperCase();
-    const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-    if (!ifscRegex.test(cleanIfsc)) {
-      return res.status(400).json({ success: false, message: 'Invalid IFSC code format. E.g. HDFC0001234' });
+
+    if (!/^\d{9,18}$/.test(cleanAcc)) {
+      return res.status(400).json({
+        success: false, field: 'account',
+        message: `Invalid account number "${cleanAcc}" — must be 9 to 18 digits with no spaces or dashes.`,
+      });
+    }
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
+      return res.status(400).json({
+        success: false, field: 'ifsc',
+        message: `Invalid IFSC code "${cleanIfsc}" — correct format is 4 letters + 0 + 6 alphanumeric (e.g. HDFC0001234).`,
+      });
     }
 
-    // Fetch user mobile number to pass as an optional parameter to APItxt
+    // ── Step 2: Verify account number via Penny Drop ─────────────────────────
     const [userRow] = await pool.query('SELECT mobile FROM users WHERE id = ?', [userId]);
     const mobile = userRow[0]?.mobile || '';
 
-    // Call Penny Drop API
-    const verifyRes = await verifyBankAccount({
-      ifsc: cleanIfsc,
-      accountNumber: cleanAcc,
-      name: account_holder.trim(),
-      mobile: mobile,
-      useCache: true,
-    });
+    let verifyRes;
+    try {
+      verifyRes = await verifyBankAccount({
+        ifsc: cleanIfsc, accountNumber: cleanAcc,
+        name: account_holder.trim(), mobile, useCache: false,
+      });
+    } catch (err) {
+      return res.status(502).json({ success: false, message: `Bank verification service error: ${err.message}` });
+    }
 
+    // ── Step 3: Account must be found at this IFSC ───────────────────────────
     if (!verifyRes.success || !verifyRes.accountExists) {
       return res.status(400).json({
-        success: false,
-        message: verifyRes.message || 'Bank Account verification failed. Account does not exist.'
+        success: false, field: 'account_ifsc',
+        message: `Account number ${cleanAcc} was not found at IFSC ${cleanIfsc}. Please check both and try again.`,
       });
     }
 
-    // Verify IFSC code
-    const verifyIfsc = (verifyRes.ifsc || '').trim().toUpperCase();
-    if (verifyIfsc !== cleanIfsc) {
+    // ── Step 4: Account number echo-back must match ──────────────────────────
+    const returnedAcc = (verifyRes.accountNumber || '').trim().replace(/[\s-]/g, '');
+    if (returnedAcc && returnedAcc !== cleanAcc) {
       return res.status(400).json({
-        success: false,
-        message: 'IFSC code does not match bank records.'
+        success: false, field: 'account',
+        message: `Account number mismatch — bank confirmed account ending in ...${returnedAcc.slice(-4)}, but you entered ...${cleanAcc.slice(-4)}. Please re-check your account number.`,
       });
     }
 
-    // Verify Account Number
-    const verifyAcc = (verifyRes.accountNumber || '').trim().replace(/[\s-]/g, '');
-    const enteredAcc = cleanAcc.replace(/[\s-]/g, '');
-    if (verifyAcc !== enteredAcc) {
+    // ── Step 5: IFSC echo-back must match ────────────────────────────────────
+    const returnedIfsc = (verifyRes.ifsc || '').trim().toUpperCase();
+    if (returnedIfsc && returnedIfsc !== cleanIfsc) {
       return res.status(400).json({
-        success: false,
-        message: 'Account number does not match bank records.'
+        success: false, field: 'ifsc',
+        message: `IFSC mismatch — bank returned "${returnedIfsc}" but you entered "${cleanIfsc}". Please use the correct IFSC for your branch.`,
       });
     }
 
-    // Verify Account Holder Name (Case-insensitive matching)
-    const verifyName = (verifyRes.nameAtBank || '').trim().toLowerCase().replace(/\s+/g, ' ');
-    const enteredName = account_holder.trim().toLowerCase().replace(/\s+/g, ' ');
-    if (verifyName !== enteredName) {
+    // ── Step 6: Account holder name must match ───────────────────────────────
+    if (!verifyRes.nameAtBank) {
       return res.status(400).json({
-        success: false,
-        message: 'Account holder name does not match bank records.'
+        success: false, field: 'holder',
+        message: 'Bank did not return the account holder name. Please try again or contact your bank.',
+      });
+    }
+    const nameResult = compareName(verifyRes.nameAtBank, account_holder.trim());
+    if (!nameResult.match) {
+      return res.status(400).json({
+        success: false, field: 'holder',
+        message: `Name mismatch — your bank has "${verifyRes.nameAtBank}" registered for this account, but you entered "${account_holder.trim()}". Enter your name exactly as it appears on your bank passbook.`,
       });
     }
 
-    const finalHolderName = verifyRes.nameAtBank || account_holder.trim();
+    const finalHolderName = verifyRes.nameAtBank;
 
-    // Save/Update with is_verified = 1
+    // ── Step 7: Verify IFSC code and fetch branch details ────────────────────
+    let ifscData = null;
+    try {
+      const ifscRes = await verifyIFSC(cleanIfsc);
+      if (!ifscRes.success) {
+        return res.status(400).json({
+          success: false, field: 'ifsc',
+          message: `IFSC code "${cleanIfsc}" could not be verified — ${ifscRes.message}. Please check the IFSC printed on your cheque or passbook.`,
+        });
+      }
+      ifscData = ifscRes;
+    } catch (ifscErr) {
+      return res.status(502).json({ success: false, message: `IFSC verification service error: ${ifscErr.message}` });
+    }
+
+    // Save/Update bank details with all IFSC branch data
     await pool.query(
-      `INSERT INTO bank_details (user_id, account_holder, account_number, ifsc_code, bank_name, account_type, is_verified)
-       VALUES (?, ?, ?, ?, ?, ?, 1)
+      `INSERT INTO bank_details
+         (user_id, account_holder, account_number, ifsc_code, bank_name, account_type, is_verified,
+          ifsc_bank_name, branch, branch_address, city, state, micr, swift, contact,
+          neft, rtgs, imps, upi, ifsc_verified, ifsc_request_id)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
        ON DUPLICATE KEY UPDATE
-         account_holder = VALUES(account_holder),
-         account_number = VALUES(account_number),
-         ifsc_code = VALUES(ifsc_code),
-         bank_name = VALUES(bank_name),
-         account_type = VALUES(account_type),
-         is_verified = 1,
-         updated_at = NOW()`,
+         account_holder  = VALUES(account_holder),
+         account_number  = VALUES(account_number),
+         ifsc_code       = VALUES(ifsc_code),
+         bank_name       = VALUES(bank_name),
+         account_type    = VALUES(account_type),
+         is_verified     = 1,
+         ifsc_bank_name  = VALUES(ifsc_bank_name),
+         branch          = VALUES(branch),
+         branch_address  = VALUES(branch_address),
+         city            = VALUES(city),
+         state           = VALUES(state),
+         micr            = VALUES(micr),
+         swift           = VALUES(swift),
+         contact         = VALUES(contact),
+         neft            = VALUES(neft),
+         rtgs            = VALUES(rtgs),
+         imps            = VALUES(imps),
+         upi             = VALUES(upi),
+         ifsc_verified   = 1,
+         ifsc_request_id = VALUES(ifsc_request_id),
+         updated_at      = NOW()`,
       [
         userId,
         finalHolderName,
         cleanAcc,
         cleanIfsc,
-        bank_name.trim(),
-        account_type || 'savings'
+        ifscData.bank || bank_name.trim(),   // prefer API-confirmed bank name
+        account_type || 'savings',
+        ifscData.bank    || null,
+        ifscData.branch  || null,
+        ifscData.address || null,
+        ifscData.city    || null,
+        ifscData.state   || null,
+        ifscData.micr    || null,
+        ifscData.swift   || null,
+        ifscData.contact || null,
+        ifscData.neft ? 1 : 0,
+        ifscData.rtgs ? 1 : 0,
+        ifscData.imps ? 1 : 0,
+        ifscData.upi  ? 1 : 0,
+        ifscData.requestId || null,
       ]
     );
 
@@ -331,11 +400,26 @@ const verifyBankDetails = async (req, res) => {
     await invalidateUserCache(userId);
 
     return res.json({
-      success: true,
-      verified: true,
+      success:      true,
+      verified:     true,
       name_at_bank: finalHolderName,
-      utr: verifyRes.utr,
-      message: 'Bank account verified successfully via Penny Drop API.'
+      utr:          verifyRes.utr,
+      ifsc: {
+        ifsc:    ifscData.ifsc,
+        bank:    ifscData.bank,
+        branch:  ifscData.branch,
+        address: ifscData.address,
+        city:    ifscData.city,
+        state:   ifscData.state,
+        micr:    ifscData.micr,
+        swift:   ifscData.swift,
+        contact: ifscData.contact,
+        neft:    ifscData.neft,
+        rtgs:    ifscData.rtgs,
+        imps:    ifscData.imps,
+        upi:     ifscData.upi,
+      },
+      message: 'Bank account and IFSC verified successfully.',
     });
   } catch (err) {
     console.error('[verifyBankDetails]', err);
@@ -361,7 +445,7 @@ const getDashboard = async (req, res) => {
       ? 'approved'
       : (kycRows[0]?.status || 'not_submitted');
     const [activeLoan] = await pool.query(
-      'SELECT * FROM loans WHERE user_id = ? AND status IN ("disbursed","approved") ORDER BY created_at DESC LIMIT 1', [userId]
+      'SELECT * FROM loans WHERE user_id = ? AND status IN ("disbursed","approved","withdrawal_requested") ORDER BY created_at DESC LIMIT 1', [userId]
     );
     let nextEmiRow = null;
     if (activeLoan.length && activeLoan[0].status === 'disbursed') {

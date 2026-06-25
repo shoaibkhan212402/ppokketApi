@@ -116,6 +116,24 @@ const createMandate = async (req, res) => {
     expiresOn.setFullYear(expiresOn.getFullYear() + 10); // 10 years expiry
     const formattedExpiry = expiresOn.toISOString().replace('T', ' ').substring(0, 19);
 
+    const subPayload = {
+      subscriptionId: subscriptionId,
+      planId: planId,
+      customerName: user.full_name || 'Customer',
+      customerPhone: cleanPhone,
+      customerEmail: user.email || 'customer@ppokket.com',
+      authAmount: 1.00,
+      expiresOn: formattedExpiry,
+      returnUrl: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Auto+Pay&sub_id={subscription_id}`,
+      notificationChannels: ['SMS', 'EMAIL'],
+      // Pre-fill the already-verified bank account so user doesn't have to re-enter
+      ...(bank.account_number && {
+        customerBankAccountNumber: bank.account_number,
+        customerBankIfsc:          bank.ifsc_code,
+        customerBankAccountType:   (bank.account_type || 'savings').toLowerCase(),
+      }),
+    };
+
     const subRes = await fetch(subUrl, {
       method: 'POST',
       headers: {
@@ -123,17 +141,7 @@ const createMandate = async (req, res) => {
         'X-Client-Id': config.appId,
         'X-Client-Secret': config.secretKey
       },
-      body: JSON.stringify({
-        subscriptionId: subscriptionId,
-        planId: planId,
-        customerName: user.full_name || 'Customer',
-        customerPhone: cleanPhone,
-        customerEmail: user.email || 'customer@ppokket.com',
-        authAmount: 1.00,
-        expiresOn: formattedExpiry,
-        returnUrl: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Auto+Pay&sub_id={subscription_id}`,
-        notificationChannels: ['SMS', 'EMAIL']
-      })
+      body: JSON.stringify(subPayload)
     });
 
     const subData = await subRes.json();
@@ -255,8 +263,9 @@ const verifyMandate = async (req, res) => {
       });
     }
 
+    const subscription = subData.subscription || {};
     let localStatus = 'pending';
-    const cfStatus = String(subData.status).toUpperCase();
+    const cfStatus = String(subscription.status || subData.status || '').toUpperCase();
 
     if (['ACTIVE', 'ACTIVATED', 'COMPLETED'].includes(cfStatus)) {
       localStatus = 'active';
@@ -267,12 +276,13 @@ const verifyMandate = async (req, res) => {
     }
 
     // Update database status — also persist subReferenceId if we now have it
-    const newMandateId = subData.subReferenceId || mandate.mandate_id || null;
+    const newMandateId = subscription.subReferenceId || subData.subReferenceId || mandate.mandate_id || null;
+    const resolvedMode = subscription.mode || subscription.paymentMode || subData.paymentMode || mandate.payment_mode || null;
     await pool.query(
       `UPDATE bank_mandates SET
         status = ?, umrn = ?, payment_mode = ?, mandate_id = COALESCE(?, mandate_id)
        WHERE user_id = ?`,
-      [localStatus, subData.umrn || mandate.umrn || null, subData.paymentMode || mandate.payment_mode || null, newMandateId, userId]
+      [localStatus, subscription.umrn || subData.umrn || mandate.umrn || null, resolvedMode, newMandateId, userId]
     );
 
     if (localStatus === 'active' && mandate.status !== 'active') {
@@ -359,15 +369,20 @@ const getMandateStatus = async (req, res) => {
     const mandate = mandateRows.length ? mandateRows[0] : null;
 
     // Fetch bank details
-    const [bankRows] = await pool.query('SELECT bank_name, account_number, is_verified FROM bank_details WHERE user_id = ?', [userId]);
+    const [bankRows] = await pool.query('SELECT bank_name, account_number, ifsc_code, account_type, account_holder, is_verified FROM bank_details WHERE user_id = ?', [userId]);
     const bank = bankRows.length ? bankRows[0] : null;
 
     res.json({
       success: true,
       hasBank: !!bank,
       bankVerified: bank ? !!bank.is_verified : false,
-      bankName: bank ? bank.bank_name : null,
-      accountNumber: bank ? bank.account_number : null,
+      bank: bank ? {
+        bank_name:      bank.bank_name,
+        account_number: bank.account_number,
+        account_holder: bank.account_holder,
+        ifsc_code:      bank.ifsc_code,
+        account_type:   bank.account_type,
+      } : null,
       mandate: mandate
     });
   } catch (err) {

@@ -2,6 +2,7 @@ const { pool } = require('../config/db');
 const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
 const { sendNotification } = require('../utils/fcm');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
+const { sendLoanAgreementEmail } = require('../utils/email');
 
 // POST /api/loan/apply
 const applyLoan = async (req, res) => {
@@ -17,7 +18,7 @@ const applyLoan = async (req, res) => {
 
     // Check existing active loan
     const [existing] = await pool.query(
-      'SELECT id FROM loans WHERE user_id = ? AND status IN ("pending","under_review","approved","disbursed")',
+      'SELECT id FROM loans WHERE user_id = ? AND status IN ("pending","under_review","approved","disbursed","withdrawal_requested")',
       [userId]
     );
     if (existing.length) {
@@ -101,6 +102,9 @@ const applyLoan = async (req, res) => {
       [userId, 'Loan Application Submitted', `Your loan application of ₹${amount} has been submitted and is under review.`, 'loan']
     );
 
+    const firstEmiDate = schedule[0]?.due_date || null;
+    const firstEmiAmount = schedule[0]?.emi_amount || emi_amount;
+
     res.status(201).json({
       success: true,
       message: 'Loan application submitted successfully',
@@ -116,6 +120,8 @@ const applyLoan = async (req, res) => {
         processing_fee_in_first_emi: settings.processing_fee_in_first_emi ? 1 : 0,
         total_payable,
         status: 'pending',
+        next_emi_date:   firstEmiDate,
+        next_emi_amount: firstEmiAmount,
       }
     });
     // Invalidate caches
@@ -295,4 +301,141 @@ const getEmiSchedule = async (req, res) => {
   }
 };
 
-module.exports = { applyLoan, getLoanHistory, getLoanDetails, emiCalculator, getEmiSchedule };
+// POST /api/loan/request-withdrawal/:id
+const requestWithdrawal = async (req, res) => {
+  try {
+    const loanId = req.params.id;
+    const userId = req.user.id;
+    const { agreementAccepted } = req.body;
+
+    if (!agreementAccepted) {
+      return res.status(400).json({ success: false, message: 'You must accept the Loan Agreement to proceed.' });
+    }
+
+    // 1. Get loan details
+    const [loanRows] = await pool.query('SELECT * FROM loans WHERE id = ? AND user_id = ?', [loanId, userId]);
+    if (!loanRows.length) {
+      return res.status(404).json({ success: false, message: 'Loan not found' });
+    }
+    const loan = loanRows[0];
+
+    // 2. Validate loan status is 'approved'
+    if (loan.status !== 'approved') {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Withdrawal can only be requested for approved loans. Current status is ${loan.status}.` 
+      });
+    }
+
+    // 3. Validate bank mandate status is 'active'
+    const [mandateRows] = await pool.query('SELECT status FROM bank_mandates WHERE user_id = ?', [userId]);
+    const mandateActive = mandateRows.length > 0 && mandateRows[0].status === 'active';
+    if (!mandateActive) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Auto-Debit mandate must be active before requesting withdrawal.' 
+      });
+    }
+
+    // 4. Update loan status to 'withdrawal_requested' and set agreement details
+    await pool.query(
+      `UPDATE loans 
+       SET status = 'withdrawal_requested', 
+           agreement_accepted = 1, 
+           agreement_accepted_at = NOW() 
+       WHERE id = ?`,
+      [loanId]
+    );
+
+    // 5. Create user notification
+    await pool.query(
+      'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+      [
+        userId, 
+        'Withdrawal Request Submitted', 
+        `Your withdrawal request for ₹${loan.amount} has been submitted successfully and is awaiting disbursement.`, 
+        'loan'
+      ]
+    );
+
+    // Fetch user and bank details for email/notification
+    const [userRows] = await pool.query(
+      `SELECT u.fcm_token, u.full_name, u.email, u.mobile, a.full_address 
+       FROM users u 
+       LEFT JOIN aadhaar_kyc a ON u.id = a.user_id 
+       WHERE u.id = ?`, 
+      [userId]
+    );
+    const [bankRows] = await pool.query(
+      'SELECT bank_name, account_number FROM bank_details WHERE user_id = ? ORDER BY id DESC LIMIT 1',
+      [userId]
+    );
+
+    // Send push notification
+    if (userRows.length && userRows[0].fcm_token) {
+      sendNotification(
+        userRows[0].fcm_token, 
+        'Withdrawal Requested 💸', 
+        `Your withdrawal request for ₹${loan.amount} has been received.`, 
+        { screen: 'Loans' }
+      ).catch(e => console.error('[requestWithdrawal push notification]', e));
+    }
+
+    // Send email with PDF agreement
+    if (userRows.length && bankRows.length) {
+      sendLoanAgreementEmail({
+        user: userRows[0],
+        loan: loan,
+        bank: bankRows[0]
+      }).catch(err => console.error('Failed sending loan agreement email:', err));
+    }
+
+    // Clear caches
+    await invalidateUserCache(userId);
+    await delCache('admin:dashboard', 'admin:dashboard:partner:*');
+
+    return res.json({ 
+      success: true, 
+      message: 'Withdrawal request submitted successfully' 
+    });
+  } catch (err) {
+    console.error('[requestWithdrawal]', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/loan/withdrawal-status/:id
+const getWithdrawalStatus = async (req, res) => {
+  try {
+    const loanId = req.params.id;
+    const userId = req.user.id;
+
+    // Get loan details
+    const [loanRows] = await pool.query('SELECT * FROM loans WHERE id = ? AND user_id = ?', [loanId, userId]);
+    if (!loanRows.length) {
+      return res.status(404).json({ success: false, message: 'Loan not found' });
+    }
+    const loan = loanRows[0];
+
+    // Get mandate details
+    const [mandateRows] = await pool.query('SELECT status FROM bank_mandates WHERE user_id = ?', [userId]);
+    const mandateActive = mandateRows.length > 0 && mandateRows[0].status === 'active';
+
+    return res.json({
+      success: true,
+      loan: {
+        id: loan.id,
+        amount: loan.amount,
+        status: loan.status,
+        agreement_accepted: loan.agreement_accepted,
+        agreement_accepted_at: loan.agreement_accepted_at
+      },
+      mandate_active: mandateActive
+    });
+  } catch (err) {
+    console.error('[getWithdrawalStatus]', err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { applyLoan, getLoanHistory, getLoanDetails, emiCalculator, getEmiSchedule, requestWithdrawal, getWithdrawalStatus };

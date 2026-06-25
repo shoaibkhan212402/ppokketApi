@@ -217,7 +217,9 @@ const getAllLoans = async (req, res) => {
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
 
     let query = `
-      SELECT l.*, u.full_name, u.mobile, u.email, u.credit_score
+      SELECT l.*, u.full_name, u.mobile, u.email, 
+             COALESCE(u.credit_score, u.experian_score) AS credit_score,
+             u.occupation, u.monthly_income
       FROM loans l
       JOIN users u ON u.id = l.user_id
     `;
@@ -572,7 +574,9 @@ const getPendingKYC = async (req, res) => {
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
     let query = `
        SELECT k.*, u.full_name, u.mobile, u.email, u.pan_number, u.aadhaar_number,
+              u.date_of_birth, u.credit_limit, u.interest_rate, u.kyc_approved_tenure,
               bd.bank_name, bd.account_holder, bd.account_number, bd.ifsc_code, bd.account_type,
+              bd.branch, bd.city, bd.state, bd.micr, bd.swift,
               COALESCE(bd.is_verified, 0) AS bank_verified
        FROM kyc_documents k
        JOIN users u ON u.id = k.user_id
@@ -773,15 +777,39 @@ const disburseLoan = async (req, res) => {
 
     // Lock the loan row to prevent concurrent disbursals
     const [loanRows] = await conn.query(
-      "SELECT * FROM loans WHERE id = ? AND status = 'approved' FOR UPDATE",
+      "SELECT * FROM loans WHERE id = ? FOR UPDATE",
       [loanId]
     );
     if (!loanRows.length) {
       await conn.rollback(); conn.release();
-      return res.status(404).json({ success: false, message: 'Approved loan not found' });
+      return res.status(404).json({ success: false, message: 'Loan not found' });
     }
     const loan = loanRows[0];
     const userId = loan.user_id;
+
+    if (loan.status === 'approved') {
+      await conn.rollback(); conn.release();
+      return res.status(400).json({
+        success: false,
+        message: 'User must complete Auto-Debit setup and accept the Loan Agreement before disbursement.'
+      });
+    }
+
+    if (loan.status !== 'withdrawal_requested') {
+      await conn.rollback(); conn.release();
+      return res.status(400).json({
+        success: false,
+        message: `Loan status is ${loan.status}. Disbursement requires withdrawal_requested status.`
+      });
+    }
+
+    if (loan.agreement_accepted !== 1) {
+      await conn.rollback(); conn.release();
+      return res.status(400).json({
+        success: false,
+        message: 'Disbursement failed: User has not accepted the Loan Agreement.'
+      });
+    }
 
     // Bank details check inside transaction
     const [bank] = await conn.query('SELECT * FROM bank_details WHERE user_id = ?', [userId]);

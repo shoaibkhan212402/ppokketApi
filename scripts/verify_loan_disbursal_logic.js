@@ -16,6 +16,7 @@ async function runTests() {
     await pool.query('DELETE FROM emi_schedule WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM transactions WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM loans WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
+    await pool.query('DELETE FROM bank_mandates WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM bank_details WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM users WHERE mobile = "7777777777"');
 
@@ -124,6 +125,35 @@ async function runTests() {
     // Confirm loan is approved in DB
     const [loanAfterApprove] = await pool.query('SELECT * FROM loans WHERE id = ?', [loanId]);
     console.log(`Loan status after approve: ${loanAfterApprove[0].status}`);
+
+    // Insert mock active bank mandate
+    await pool.query(
+      `INSERT INTO bank_mandates (user_id, subscription_id, status)
+       VALUES (?, "SUB_TEST_12345", "active")`,
+      [userId]
+    );
+    console.log('Mock active bank mandate inserted.');
+
+    // User requests withdrawal
+    console.log('\n--- TEST 2.5: User accepts agreement and requests withdrawal ---');
+    const requestRes = await fetch(`${API_BASE}/loan/request-withdrawal/${loanId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ agreementAccepted: true })
+    });
+    const requestData = await requestRes.json();
+    console.log('Request withdrawal response:', requestData);
+    if (!requestData.success) throw new Error('Request withdrawal failed');
+
+    // Confirm loan status is withdrawal_requested
+    const [loanAfterRequest] = await pool.query('SELECT status FROM loans WHERE id = ?', [loanId]);
+    console.log(`Loan status after request: ${loanAfterRequest[0].status}`);
+    if (loanAfterRequest[0].status !== 'withdrawal_requested') {
+      throw new Error(`Expected status to be withdrawal_requested, got ${loanAfterRequest[0].status}`);
+    }
 
     // Verify EMI schedule is hidden from user
     console.log('\n--- TEST 3: Verify user cannot see EMI schedule for approved loan ---');
@@ -239,6 +269,7 @@ async function runTests() {
     await pool.query('DELETE FROM emi_schedule WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM transactions WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM loans WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
+    await pool.query('DELETE FROM bank_mandates WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM bank_details WHERE user_id IN (SELECT id FROM users WHERE mobile = "7777777777")');
     await pool.query('DELETE FROM users WHERE mobile = "7777777777"');
 
