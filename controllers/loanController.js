@@ -9,10 +9,6 @@ const applyLoan = async (req, res) => {
     const userId = req.user.id;
     const { amount, duration_months, purpose } = req.body;
 
-    if (![3, 6].includes(parseInt(duration_months))) {
-      return res.status(400).json({ success: false, message: 'Tenure must be either 3 or 6 months.' });
-    }
-
     // Check KYC
     const [kyc] = await pool.query('SELECT status FROM kyc_documents WHERE user_id = ?', [userId]);
     if (!kyc.length || kyc[0].status !== 'approved') {
@@ -30,11 +26,17 @@ const applyLoan = async (req, res) => {
 
     // Check credit limit & withdrawal limit; fetch user custom interest rate and terms
     const [userRows] = await pool.query(
-      'SELECT credit_limit, withdrawal_limit, interest_rate, custom_processing_fee_pct, custom_first_emi_pct FROM users WHERE id = ?',
+      'SELECT credit_limit, withdrawal_limit, interest_rate, custom_processing_fee_pct, custom_first_emi_pct, kyc_approved_tenure FROM users WHERE id = ?',
       [userId]
     );
     if (!userRows.length) return res.status(404).json({ success: false, message: 'User not found' });
     const user = userRows[0];
+
+    // Dynamically validate requested duration against approved maximum tenure
+    const maxTenure = user.kyc_approved_tenure ? parseInt(user.kyc_approved_tenure) : 6;
+    if (parseInt(duration_months) < 1 || parseInt(duration_months) > maxTenure) {
+      return res.status(400).json({ success: false, message: `Tenure must be between 1 and ${maxTenure} months.` });
+    }
     const creditLimit = Number(user.credit_limit) || 0;
     // effective cap = min(credit_limit, withdrawal_limit) — withdrawal_limit NULL means no extra cap
     const withdrawalLimit = user.withdrawal_limit !== null ? Number(user.withdrawal_limit) : creditLimit;

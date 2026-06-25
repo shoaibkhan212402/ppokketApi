@@ -17,7 +17,7 @@ const getMyReferrals = async (req, res) => {
     const [referrals] = await pool.query(
       `SELECT r.id, r.status, r.cashback_amount, r.credited_amount, r.note, r.created_at,
               u.full_name AS referred_name, u.mobile AS referred_mobile,
-              u.is_kyc_verified, u.kyc_status,
+              u.is_kyc_verified,
               kd.status AS kyc_doc_status
          FROM referrals r
          JOIN users u ON u.id = r.referred_id

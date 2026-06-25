@@ -59,6 +59,35 @@ const updateProfile = async (req, res) => {
   try {
     const { full_name, email, pan_number, aadhaar_number, date_of_birth, occupation, monthly_income, fcm_token, dark_mode, language, referral_code } = req.body;
     
+    let formattedDob = date_of_birth;
+
+    // Enforce profile completeness if updating personal details
+    if (full_name !== undefined || email !== undefined || date_of_birth !== undefined || occupation !== undefined || monthly_income !== undefined) {
+      if (!full_name || !full_name.trim()) return res.status(400).json({ success: false, message: 'Full Name is required' });
+      if (!email || !email.trim()) return res.status(400).json({ success: false, message: 'Email is required' });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return res.status(400).json({ success: false, message: 'Invalid email address format' });
+      if (!date_of_birth) return res.status(400).json({ success: false, message: 'Date of Birth is required' });
+      
+      // Support date format checking
+      formattedDob = String(date_of_birth).trim();
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(formattedDob)) {
+        // Convert DD/MM/YYYY to YYYY-MM-DD
+        const parts = formattedDob.split('/');
+        formattedDob = `${parts[2]}-${parts[1]}-${parts[0]}`;
+      }
+      
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(formattedDob)) {
+        return res.status(400).json({ success: false, message: 'Date of Birth must be in YYYY-MM-DD format' });
+      }
+      
+      if (!occupation) return res.status(400).json({ success: false, message: 'Occupation is required' });
+      if (occupation !== 'student') {
+        if (monthly_income === undefined || monthly_income === null || parseFloat(monthly_income) <= 0) {
+          return res.status(400).json({ success: false, message: 'Monthly Income is required and must be greater than 0' });
+        }
+      }
+    }
+
     // Process referral code if provided and user does not already have a referrer
     if (referral_code) {
       const [currentUserRow] = await pool.query('SELECT referred_by FROM users WHERE id = ?', [req.user.id]);
@@ -107,7 +136,7 @@ const updateProfile = async (req, res) => {
     let final_aadhaar = aadhaar_number;
     let final_name = full_name;
     let final_email = email;
-    let final_dob = date_of_birth;
+    let final_dob = formattedDob;
     let final_occ = occupation;
     let final_inc = monthly_income;
 
