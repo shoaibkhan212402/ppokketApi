@@ -143,7 +143,8 @@ const getLoanHistory = async (req, res) => {
     const [loans] = await pool.query(
       `SELECT l.*,
         (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date,
-        (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount
+        (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
+        (SELECT IFNULL(SUM(e.principal_amount), 0) FROM emi_schedule e WHERE e.loan_id = l.id AND e.status = 'paid') AS principal_paid
        FROM loans l WHERE l.user_id = ? ORDER BY l.created_at DESC`,
       [req.user.id]
     );
@@ -166,7 +167,7 @@ const getLoanDetails = async (req, res) => {
     if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
 
     let emiSchedule = [];
-    if (loan[0].status === 'disbursed') {
+    if (['disbursed', 'closed'].includes(loan[0].status)) {
       const [rows] = await pool.query(
         'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no',
         [req.params.id]
@@ -286,7 +287,7 @@ const getEmiSchedule = async (req, res) => {
     if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
 
     let schedule = [];
-    if (loan[0].status === 'disbursed') {
+    if (['disbursed', 'closed'].includes(loan[0].status)) {
       const [rows] = await pool.query(
         'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
         [loanId]

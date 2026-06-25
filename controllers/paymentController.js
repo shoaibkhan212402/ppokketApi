@@ -462,5 +462,26 @@ const initiateRefund = async (req, res) => {
   }
 };
 
-module.exports = { createOrder, verifyPayment, getPaymentHistory, handleWebhook, initiateRefund };
+// POST /api/payment/cancel
+const cancelPayment = async (req, res) => {
+  try {
+    const { razorpay_order_id } = req.body;
+    const userId = req.user.id;
 
+    if (!razorpay_order_id) {
+      return res.status(400).json({ success: false, message: 'razorpay_order_id required' });
+    }
+
+    await pool.query(
+      "UPDATE transactions SET status = 'failed' WHERE razorpay_order_id = ? AND user_id = ? AND status = 'pending'",
+      [razorpay_order_id, userId]
+    );
+
+    res.json({ success: true, message: 'Payment marked as failed/cancelled' });
+  } catch (err) {
+    console.error('[cancelPayment]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { createOrder, verifyPayment, getPaymentHistory, handleWebhook, initiateRefund, cancelPayment };

@@ -3,6 +3,38 @@ const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../confi
 const { sendNotification } = require('../utils/fcm');
 const { verifyBankAccount, verifyIFSC, compareName } = require('../utils/bankVerify');
 
+// Dynamic revolving credit calculation helper
+const getUserCreditDetails = async (userId, creditLimit, withdrawalLimit) => {
+  const [loans] = await pool.query(
+    `SELECT id, amount, status, total_payable, amount_paid FROM loans WHERE user_id = ? AND status != 'rejected'`,
+    [userId]
+  );
+  
+  let occupiedCredit = 0;
+  for (const loan of loans) {
+    if (loan.status === 'closed') {
+      const fullyPaid = Number(loan.amount_paid || 0) >= Number(loan.total_payable || 1);
+      if (!fullyPaid) {
+        // occupied credit is outstanding principal
+        occupiedCredit += 0;
+      }
+    } else {
+      const [emiRows] = await pool.query(
+        `SELECT IFNULL(SUM(principal_amount), 0) AS principal_paid FROM emi_schedule WHERE loan_id = ? AND status = 'paid'`,
+        [loan.id]
+      );
+      const principalPaid = parseFloat(emiRows[0]?.principal_paid || 0);
+      const occupied = Math.max(0, parseFloat(loan.amount) - principalPaid);
+      occupiedCredit += occupied;
+    }
+  }
+
+  const effectiveLimit = withdrawalLimit !== null ? Math.min(parseFloat(creditLimit), parseFloat(withdrawalLimit)) : parseFloat(creditLimit);
+  const availableCredit = Math.max(0, effectiveLimit - occupiedCredit);
+
+  return { occupiedCredit, availableCredit };
+};
+
 // GET /api/user/profile
 const getProfile = async (req, res) => {
   try {
@@ -46,6 +78,11 @@ const getProfile = async (req, res) => {
     user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
     user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
     user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+
+    // Calculate dynamic revolving limits
+    const creditDetails = await getUserCreditDetails(user.id, user.credit_limit, user.withdrawal_limit);
+    user.available_credit = creditDetails.availableCredit;
+    user.occupied_credit = creditDetails.occupiedCredit;
 
     const response = { success: true, user };
     await setCache(cacheKey, response, CACHE_TTL.SHORT);
@@ -436,7 +473,7 @@ const getDashboard = async (req, res) => {
     if (cached) return res.json(cached);
 
     const [userRows] = await pool.query(
-      'SELECT credit_limit, wallet_balance, credit_score, experian_score, is_kyc_verified FROM users WHERE id = ?', [userId]
+      'SELECT credit_limit, withdrawal_limit, wallet_balance, credit_score, experian_score, is_kyc_verified FROM users WHERE id = ?', [userId]
     );
     const [kycRows] = await pool.query(
       'SELECT status FROM kyc_documents WHERE user_id = ?', [userId]
@@ -455,11 +492,15 @@ const getDashboard = async (req, res) => {
       nextEmiRow = nextEmi[0] || null;
     }
     const [recentTxn] = await pool.query(
-      'SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 5', [userId]
+      "SELECT * FROM transactions WHERE user_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT 5", [userId]
     );
     const [unreadNotif] = await pool.query(
       'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0', [userId]
     );
+
+    // Calculate dynamic revolving limits
+    const creditDetails = await getUserCreditDetails(userId, userRows[0]?.credit_limit || 0, userRows[0]?.withdrawal_limit ?? null);
+
     const response = {
       success: true,
       dashboard: {
@@ -469,6 +510,8 @@ const getDashboard = async (req, res) => {
         next_emi: nextEmiRow,
         recent_transactions: recentTxn,
         unread_notifications: unreadNotif[0]?.count || 0,
+        available_credit: creditDetails.availableCredit,
+        occupied_credit: creditDetails.occupiedCredit,
       }
     };
     await setCache(cacheKey, response, CACHE_TTL.SHORT);

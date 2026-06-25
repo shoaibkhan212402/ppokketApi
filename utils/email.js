@@ -64,13 +64,113 @@ const getTransporter = async () => {
   }
 };
 
+// Corporate Header Helper for PDFs
+const drawHeader = (doc, titleText) => {
+  doc.fontSize(15).fillColor('#1e3a8a').text('PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', { align: 'center', bold: true });
+  doc.fontSize(8.5).fillColor('#475569').text('Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', { align: 'center' });
+  doc.text('Partnered with RBI-registered NBFCs', { align: 'center' });
+  doc.strokeColor('#cbd5e1').lineWidth(1).moveTo(50, 95).lineTo(562, 95).stroke();
+  doc.moveDown(1.5);
+  doc.fontSize(12).fillColor('#0f172a').text(titleText, 50, 105, { align: 'center', underline: true, bold: true });
+  doc.moveDown(1.5);
+};
+
+// Corporate Footer Helper for PDFs
+const drawFooter = (doc) => {
+  doc.strokeColor('#cbd5e1').lineWidth(0.5).moveTo(50, doc.page.height - 65).lineTo(562, doc.page.height - 65).stroke();
+  doc.fontSize(6.5).fillColor('#64748b').text('CIN: U65999DL2024PTC123456 | GSTIN: 07AAMCP1234A1Z1 | Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', 50, doc.page.height - 58, { align: 'center' });
+  doc.text('Phone: 033 6645 2400 | Email: support@ppokket.com | Website: www.ppokket.com', { align: 'center' });
+};
+
+// Late Payment matrix rows data
+const latePaymentRows = [
+  ['1', '100', '4', '3', '3', '2', '2', '2', '1', '40', '460', '32%'],
+  ['101', '250', '10', '8', '8', '5', '5', '5', '2', '100', '460', '32%'],
+  ['251', '500', '20', '15', '15', '10', '10', '10', '3', '200', '460', '32%'],
+  ['501', '1000', '40', '30', '30', '20', '20', '20', '6', '400', '460', '32%'],
+  ['1001', '1500', '60', '45', '45', '30', '30', '30', '9', '600', '460', '32%'],
+  ['1501', '2000', '80', '60', '60', '40', '40', '40', '12', '800', '460', '32%'],
+  ['2001', '2500', '100', '75', '75', '50', '50', '50', '15', '1000', '460', '32%'],
+  ['2501', '3000', '120', '90', '90', '60', '60', '60', '18', '1200', '460', '32%'],
+  ['3001', '3500', '140', '105', '105', '70', '70', '70', '21', '1400', '460', '32%'],
+  ['3501', '5000', '200', '150', '150', '100', '100', '100', '30', '2000', '460', '32%'],
+  ['5001', '7500', '300', '225', '225', '150', '150', '150', '45', '3000', '460', '32%'],
+  ['7501', '10000', '400', '300', '300', '200', '200', '200', '60', '4000', '460', '32%'],
+  ['10001', '12500', '500', '375', '375', '250', '250', '250', '75', '5000', '460', '32%'],
+  ['12501', '15000', '600', '450', '450', '300', '300', '300', '90', '6000', '460', '32%'],
+  ['15001', '17500', '700', '525', '525', '350', '350', '350', '105', '7000', '460', '32%'],
+  ['17501', '20000', '800', '600', '600', '400', '400', '400', '120', '8000', '460', '32%']
+];
+
+// Late Payment Charges matrix rendering logic
+const drawLatePaymentMatrix = (doc, startY) => {
+  let y = startY;
+  const matrixHeaders = ['Lower', 'Upper', 'DPD 1-10', '11-20', '21-30', '31-40', '41-50', '51-60', '61+ (10d)', 'Max Chg', 'Max Days', 'Ann%'];
+  const matrixColWidths = [38, 38, 32, 32, 32, 32, 32, 32, 38, 45, 45, 46];
+
+  doc.rect(50, y, 442, 14).fill('#1e3a8a');
+  doc.fillColor('#ffffff').fontSize(6.5).text('Installment Due (Rs)', 50, y + 4, { width: 76, align: 'center', bold: true });
+  doc.text('DPD Brackets & Charges (Rs)', 126, y + 4, { width: 192, align: 'center', bold: true });
+  doc.text('Limits', 318, y + 4, { width: 174, align: 'center', bold: true });
+  y += 14;
+
+  doc.rect(50, y, 442, 12).fill('#2c5282');
+  doc.fillColor('#ffffff').fontSize(6);
+  let curX = 50;
+  matrixHeaders.forEach((h, idx) => {
+    doc.text(h, curX + 2, y + 3, { width: matrixColWidths[idx] - 4, align: 'center' });
+    curX += matrixColWidths[idx];
+  });
+  y += 12;
+
+  doc.fillColor('#334155').fontSize(5.5);
+  latePaymentRows.forEach((row) => {
+    if (y + 11 > doc.page.height - 80) {
+      doc.addPage();
+      y = 50;
+      doc.rect(50, y, 442, 14).fill('#1e3a8a');
+      doc.fillColor('#ffffff').fontSize(6.5).text('Installment Due (Rs)', 50, y + 4, { width: 76, align: 'center', bold: true });
+      doc.text('DPD Brackets & Charges (Rs)', 126, y + 4, { width: 192, align: 'center', bold: true });
+      doc.text('Limits', 318, y + 4, { width: 174, align: 'center', bold: true });
+      y += 14;
+
+      doc.rect(50, y, 442, 12).fill('#2c5282');
+      doc.fillColor('#ffffff').fontSize(6);
+      let tempX = 50;
+      matrixHeaders.forEach((h, idx) => {
+        doc.text(h, tempX + 2, y + 3, { width: matrixColWidths[idx] - 4, align: 'center' });
+        tempX += matrixColWidths[idx];
+      });
+      y += 12;
+    }
+
+    doc.strokeColor('#cbd5e1').lineWidth(0.5);
+    doc.rect(50, y, 442, 11).stroke();
+
+    let cellX = 50;
+    row.forEach((cell, idx) => {
+      if (idx > 0) {
+        doc.moveTo(cellX, y).lineTo(cellX, y + 11).stroke();
+      }
+      doc.text(String(cell), cellX + 1, y + 3, { width: matrixColWidths[idx] - 2, align: 'center' });
+      cellX += matrixColWidths[idx];
+    });
+    y += 11;
+  });
+
+  return y;
+};
+
+// Bounce charges text block
+const bounceChargesText = `Bounce Charges shall mean penal charges for dishonor of any payment instrument / mandate resulting into non-payment of installment on their respective due date. Bounce charge which are penal in nature will be applicable only once for each installment. If a payment is not made by the due date (or within grace period of 1 day), due to dishonor of a payment instrument / mandate, bounce charges will be levied on 2 day(s) after the due date. Penal Charge shall mean sum of Bounce Charge and Late Payment Charge. Overdue charge shall mean sum of Interest after Due Date (IADD) and Penal Charge. Overdue Amount shall mean sum of Installment amount and Overdue Charge. For any installment that is overdue, the Overdue Charge will start applying. The Overdue Charges, mentioned above, will accumulate till the Overdue Amount becomes twice the installment amount. Once the overdue Amount reaches a value of twice the installment amount, the Penal Charges will be progressively reduced to zero such that the Overdue Amount does not exceed twice the instalment amount, while IADD will continue to accrue. Once the applicable IADD becomes equal to the installment amount, the IADD will accrue at 24% per annum. Under any circumstances, the Overdue Amount shall not exceed three times the installment amount.`;
+
 /**
  * Generates a loan agreement PDF and sends it via email to the user
  */
 const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
   try {
     const emailRecipient = user.email || 'customer@ppokket.com';
-    console.log(` Generating Loan Agreement PDF for ${user.full_name} (${emailRecipient})...`);
+    console.log(` Generating Agreement PDFs for ${user.full_name} (${emailRecipient})...`);
 
     // Load system settings
     const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
@@ -93,7 +193,7 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       settings
     );
 
-    // Calculations
+    // Common variables
     const principal = parseFloat(loan.amount);
     const term = parseInt(loan.duration_months);
     const totalRepayable = scheduleRows.reduce((sum, r) => sum + parseFloat(r.emi_amount), 0);
@@ -107,46 +207,475 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
     const borrowerName = user.full_name.toUpperCase();
     const borrowerAddress = user.full_address || "1698, j j colony, MADANPUR KHADAR, Sarita Vihar, NEW DELHI SOUTH, DELHI, 110076";
 
-    // Create PDF document
-    const doc = new PDFDocument({ margin: 50 });
     const tempDir = path.join(__dirname, '../uploads/temp');
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
-    const pdfPath = path.join(tempDir, `Agreement_Loan_${loan.id}_${Date.now()}.pdf`);
-    const stream = fs.createWriteStream(pdfPath);
-    doc.pipe(stream);
 
-    // --- Header ---
-    doc.fontSize(16).fillColor('#1e3a8a').text('PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', { align: 'center', bold: true });
-    doc.fontSize(8.5).fillColor('#475569').text('Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', { align: 'center' });
-    doc.text('Partnered with RBI-registered NBFCs', { align: 'center' });
-    doc.strokeColor('#cbd5e1').lineWidth(1).moveTo(50, 95).lineTo(562, 95).stroke();
-    doc.moveDown(2);
+    const timestamp = Date.now();
+    const pdf1Path = path.join(tempDir, `Acknowledgement_Loan_${loan.id}_${timestamp}.pdf`);
+    const pdf2Path = path.join(tempDir, `Key_Facts_Statement_Loan_${loan.id}_${timestamp}.pdf`);
+    const pdf3Path = path.join(tempDir, `Sanction_Letter_Loan_${loan.id}_${timestamp}.pdf`);
 
-    let y = 110;
+    // ==========================================
+    // PDF 1: Acknowledgement of Loan Application
+    // ==========================================
+    const doc1 = new PDFDocument({ margin: 50, bufferPages: true });
+    const stream1 = fs.createWriteStream(pdf1Path);
+    doc1.pipe(stream1);
 
-    // --- Letter Header ---
-    doc.fontSize(9.5).fillColor('#0f172a');
-    doc.text(`Date: ${agreementDate}`, 50, y);
-    y += 14;
-    doc.text(`Name of the Borrower: ${borrowerName}`, 50, y);
-    y += 14;
-    doc.text(`Address of the Borrower: ${borrowerAddress}`, 50, y, { width: 512 });
-    y += 28;
+    drawHeader(doc1, 'Acknowledgement of Loan Application');
+    
+    // Borrower Details Table
+    let y1 = doc1.y + 10;
+    const details1 = [
+      ['Name of Applicant', borrowerName],
+      ['Address of Applicant', borrowerAddress],
+      ['Mobile Number', `+91 ${user.mobile}`],
+      ['Email Address', user.email],
+      ['Proof of ID submitted', 'PAN'],
+      ['Proof of Address submitted', 'Other Identification number'],
+      ['Preferred Language', 'English']
+    ];
 
-    doc.text('Dear Sir/Madam,', 50, y);
-    y += 18;
-    doc.text('Sub: Sanction Letter', 50, y, { bold: true });
-    y += 18;
-    doc.text(`With reference to your application dated on ${agreementDate} for availing a loan for an amount of ${formatINR(principal)}, we are pleased to sanction the same subject to the terms and conditions as mentioned below and in the loan agreement to be executed.`, 50, y, { width: 512 });
-    y += 45;
+    doc1.rect(50, y1, 512, 14).fill('#1e3a8a');
+    doc1.fillColor('#ffffff').fontSize(8.5).text('Details', 55, y1 + 3, { bold: true });
+    doc1.text('Applicant', 255, y1 + 3, { bold: true });
+    y1 += 14;
 
-    // --- KFS Table ---
-    doc.fontSize(11).fillColor('#1e3a8a').text('PART-I: KEY FACT STATEMENT (KFS)', 50, y, { bold: true });
-    y += 18;
+    details1.forEach(([key, val]) => {
+      const keyHeight = doc1.heightOfString(key, { width: 195 });
+      const valHeight = doc1.heightOfString(val, { width: 300 });
+      const rowHeight = Math.max(keyHeight, valHeight) + 6;
 
-    const kfsData = [
+      doc1.strokeColor('#e2e8f0').lineWidth(0.5);
+      doc1.rect(50, y1, 512, rowHeight).stroke();
+      doc1.moveTo(250, y1).lineTo(250, y1 + rowHeight).stroke();
+
+      doc1.fillColor('#1e293b').fontSize(7.5);
+      doc1.text(key, 55, y1 + 3, { width: 190 });
+      doc1.text(val, 255, y1 + 3, { width: 295 });
+      y1 += rowHeight;
+    });
+
+    y1 += 16;
+    doc1.fontSize(9.5).fillColor('#1e3a8a').text('Declaration', 50, y1, { bold: true });
+    y1 += 14;
+
+    const declarationText = `I the undersigned wish to apply to Ppokket Financial Services Private Limited for a loan of ${formatINR(principal)} for ${term} Months at the Annualized Percentage Rate of Interest ${apr}%, Annualised Rate of Interest ${annualizedROI}% and Annualised Effective Rate of Interest ${effectiveROI}%.
+
+I agree and acknowledge that the lender is entitled to deduct processing fee of Rs. ${loan.processing_fee}, autopay setup charge of Rs ₹0 and autopay maintenance charge of Rs ₹0, which includes applicable taxes, from the Principal Amount. The lender is further entitled to charge penal Charges* on repayment post due date for each repayment instalment. In case of payment after due date, the Annualised Rate of Interest ${annualizedROI}% shall be charged till the actual date of payment.
+
+I hereby request the Lenders to debit Rs. 0/- only from Loan and pay insurer/ vendor towards insurance premium/ sale price of product / services.
+
+I hereby acknowledge and agree that the autopay mandate setup for loan repayment can only be cancelled/closed upon closure of loan or if another autopay is already registered.
+
+A look up period of 24 hours from the time of loan disbursal will be provided to me, during which I can exit from the loan by paying off the principal amount and the proportionate APR along with processing fee and autopay set up charge.
+
+I declare that the information given in this application form is true & correct, complete and updated in all respects and I have not withheld / suppressed any information. I hereby agree that it shall be my sole responsibility to advise the lender in the event of any changes in of any of the above details/information. I have read the T&C applicable to this loan, privacy policy of the lender, DLA and its LSPs, as mentioned on the lender’s website and understand its content. I further agree that my loan shall be governed by the T&C of the Lender that are in force and as may be amended by the lender from time to time. I confirm that I am aware of the features and terms & conditions of the insurance/ product / service and voluntarily availed/ purchased the same on my own. Hence, I will not hold the Lender and/or Lending Service Provider responsible for any defect/service deficiency/rejection of claim/warranty by the insurer/vendor of product/ service. I hereby provide my consent to share my personal details/KYC information to the insurer/vendor of product/ service, as required, for granting the said insurance/service/product. I certify that I am a citizen of India. I authorise the lender and or its associates/subsidiaries/affiliates to verify this information with any parties as deemed necessary.
+
+I understand that the lender has adopted risk-based pricing, which is arrived by considering, broad parameters like the borrowers financial and credit risk profile. Hence the rates of Interest will be different for different categories of borrowers based on the Interest rate model disclosed in the Interest Rate Policy on the lender's website available at "Interest Rate Policy".
+
+I confirm that the loan is not being used for any anti-social activities, investment in stock and shares, speculative activities or any purpose linked to capital market activities. I further confirm that there are no litigation/insolvency proceeding filed / pending against me by financiers/bank nor have I have ever been adjudicated insolvent.
+
+I hereby further confirm that I understand English Language and agree that all the loan documents, T&C and other related documents and future communication are to be sent in English Language. If I have specified a preferred language other than English, I understand that all documents will be sent to me in the preferred language as well.`;
+
+    doc1.fontSize(7.5).fillColor('#334155');
+    doc1.text(declarationText, 50, y1, { width: 512, align: 'justify' });
+    y1 = doc1.y + 20;
+
+    if (y1 > doc1.page.height - 180) {
+      doc1.addPage();
+      y1 = 50;
+    }
+
+    doc1.fontSize(9.5).fillColor('#1e3a8a').text('Annualized Penal Charges for Overdue Loans', 50, y1, { bold: true });
+    y1 += 14;
+    doc1.fontSize(7.5).fillColor('#334155').text('An amount to be payable by borrower on repayment post due date for each installment as tabled below:');
+    y1 += 14;
+
+    y1 = drawLatePaymentMatrix(doc1, y1);
+    y1 += 12;
+
+    doc1.fontSize(7).fillColor('#475569').text(`* The above annualized % is computed based on the maximum Penal Charges on the upper limit and considering the maximum no of days upto which it shall apply.\n- In case of payment after due date, the Annualised Rate of Interest ${annualizedROI}% shall be charged till the actual date of payment.`);
+    y1 = doc1.y + 14;
+
+    if (y1 > doc1.page.height - 180) {
+      doc1.addPage();
+      y1 = 50;
+    }
+
+    doc1.fontSize(9.5).fillColor('#1e3a8a').text('(b). Bounce Charges', 50, y1, { bold: true });
+    y1 += 14;
+    doc1.fontSize(7.5).fillColor('#334155').text(`Rs. 150.00/- per instalment\n${bounceChargesText}`, 50, y1, { width: 512, align: 'justify' });
+    y1 = doc1.y + 24;
+
+    if (y1 > doc1.page.height - 180) {
+      doc1.addPage();
+      y1 = 50;
+    }
+
+    doc1.strokeColor('#e2e8f0').lineWidth(1).moveTo(50, y1).lineTo(562, y1).stroke();
+    y1 += 14;
+
+    doc1.fontSize(9.5).fillColor('#1e3a8a').text('Acknowledgement for Receipt of Application Form', 50, y1, { bold: true });
+    y1 += 14;
+    doc1.fontSize(8.5).fillColor('#0f172a').text(`Loan Reference No. (Order ID): LREF_${loan.id}`, 50, y1);
+    doc1.text(`Date: ${agreementDate}`, 350, y1);
+    y1 += 16;
+    doc1.fontSize(7.5).fillColor('#334155').text(`We (PPOKKET FINANCIAL SERVICES PRIVATE LIMITED) have received your application for a personal loan of ${formatINR(principal)}. The company will require a processing time of approximately 48 hours from date of receipt of completed application.`, 50, y1, { width: 512 });
+    y1 = doc1.y + 24;
+
+    if (y1 > doc1.page.height - 100) {
+      doc1.addPage();
+      y1 = 50;
+    }
+
+    doc1.fontSize(8.5).fillColor('#0f172a').text('For: PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', 50, y1, { bold: true });
+    y1 += 14;
+    doc1.fillColor('#22c55e').text('Digitally Signed', 50, y1);
+    y1 += 12;
+    doc1.fillColor('#64748b').fontSize(7.5).text(`Digitally Signed by Ppokket Financial Services Private Limited\nTimestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y1);
+
+    // Draw footers on all pages for PDF 1
+    const pages1 = doc1._pageBuffer;
+    pages1.forEach((_, idx) => {
+      doc1.switchToPage(idx);
+      drawFooter(doc1);
+    });
+
+    doc1.end();
+    await new Promise((resolve) => stream1.on('finish', resolve));
+
+    // ==========================================
+    // PDF 2: Key Facts Statement (KFS)
+    // ==========================================
+    const doc2 = new PDFDocument({ margin: 50, bufferPages: true });
+    const stream2 = fs.createWriteStream(pdf2Path);
+    doc2.pipe(stream2);
+
+    drawHeader(doc2, 'Key Facts Statement');
+
+    let y2 = doc2.y + 10;
+    doc2.fontSize(8.5).fillColor('#0f172a');
+    doc2.text(`Date: ${agreementDate}`, 50, y2);
+    doc2.text(`Name of the lender: Ppokket Financial Services Private Limited`, 250, y2);
+    y2 += 14;
+    doc2.text(`Loan ref no.: LREF_${loan.id}`, 50, y2);
+    doc2.text(`Name of digital lending app: Ppokket`, 250, y2);
+    y2 += 14;
+    doc2.text(`Borrower Name: ${borrowerName}`, 50, y2);
+    y2 += 24;
+
+    doc2.fontSize(10).fillColor('#1e3a8a').text('Part 1 (Interest rate and fees/charges)', 50, y2, { bold: true });
+    y2 += 16;
+
+    const part1Data = [
+      ['1', 'Loan proposal/ account No.', `LREF_${loan.id}`, 'Type of Loan', 'Unsecured Personal Loan'],
+      ['2', 'Sanctioned Loan amount (in Rupees)', formatINR(principal), '', ''],
+      ['3', 'Disbursal schedule\n(i) Disbursement in stages or 100% upfront.\n(ii) If it is stage wise, mention the clause of loan agreement having relevant details', '100% upfront', '', ''],
+      ['4', 'Loan term (Months)', `${term}`, '', ''],
+      ['5', 'Instalment details', 'Refer Repayment Schedule', '', ''],
+      ['', 'Type of instalments', 'Number of EPIs', 'EPI (INR)', 'Commencement of repayment, post sanction'],
+      ['', 'Non Equated Periodic Instalment', 'N/A', 'N/A', 'Refer the repayment schedule'],
+      ['6', 'Interest rate (%) and type (fixed or floating or hybrid)', `${annualizedROI}% Fixed`, '', ''],
+      ['7', 'Additional Information in case of Floating rate of interest', 'N/A', '', ''],
+      ['8', 'Fee/ Charges', 'Payable to the RE (A)', 'Payable to a third party through RE (B)', '']
+    ];
+
+    // Sub fee charges
+    const feeSubData = [
+      ['(i)', 'Processing fees', 'One-time', formatINR(loan.processing_fee), '', ''],
+      ['(ii)', 'Valuation fees', 'N/A', 'N/A', 'N/A', 'N/A'],
+      ['(iii)', 'Any other (please specify)', '', '', '', ''],
+      ['', '(a) Repayment Fee', '', '', 'Recurring', '0.1% of Repayment Amount'],
+      ['', '(b) Repayment Convenience Charges', '', '', 'Recurring', 'As per PG charges'],
+      ['', '(c) Autopay setup Charge', '', '', 'One-time', 'INR 0'],
+      ['', '(d) Autopay Maintenance Charge*', '', '', 'One-time', 'INR 0']
+    ];
+
+    doc2.rect(50, y2, 512, 14).fill('#1e3a8a');
+    doc2.fillColor('#ffffff').fontSize(7.5).text('No.', 52, y2 + 3, { width: 18, align: 'center', bold: true });
+    doc2.text('Parameter', 75, y2 + 3, { width: 140, bold: true });
+    doc2.text('Details', 220, y2 + 3, { width: 290, bold: true });
+    y2 += 14;
+
+    const drawKfsRows = (rowsList) => {
+      rowsList.forEach((row) => {
+        const isHeaderRow = row[2] === '' && row[3] === '' && row[4] === '';
+        
+        let col1Text = row[0];
+        let col2Text = row[1];
+        let col3Text = row.slice(2).filter(v => v !== '').join(' | ');
+
+        if (row[1] === 'Type of instalments' || row[1] === 'Fee/ Charges') {
+          col3Text = row.slice(2).filter(v => v !== '').join(' | ');
+        }
+
+        const h1 = doc2.heightOfString(col2Text, { width: 140 });
+        const h2 = doc2.heightOfString(col3Text, { width: 290 });
+        const rowHeight = Math.max(h1, h2, 12) + 6;
+
+        if (y2 + rowHeight > doc2.page.height - 80) {
+          doc2.addPage();
+          y2 = 50;
+          doc2.rect(50, y2, 512, 14).fill('#1e3a8a');
+          doc2.fillColor('#ffffff').fontSize(7.5).text('No.', 52, y2 + 3, { width: 18, align: 'center', bold: true });
+          doc2.text('Parameter', 75, y2 + 3, { width: 140, bold: true });
+          doc2.text('Details', 220, y2 + 3, { width: 290, bold: true });
+          y2 += 14;
+        }
+
+        doc2.strokeColor('#e2e8f0').lineWidth(0.5);
+        doc2.rect(50, y2, 512, rowHeight).stroke();
+        doc2.moveTo(70, y2).lineTo(70, y2 + rowHeight).stroke();
+        doc2.moveTo(215, y2).lineTo(215, y2 + rowHeight).stroke();
+
+        doc2.fillColor('#1e293b').fontSize(6.5);
+        doc2.text(col1Text, 52, y2 + 3, { width: 18, align: 'center' });
+        doc2.text(col2Text, 75, y2 + 3, { width: 135 });
+        doc2.text(col3Text, 220, y2 + 3, { width: 285 });
+        y2 += rowHeight;
+      });
+    };
+
+    drawKfsRows(part1Data);
+    
+    // Draw fee headers
+    doc2.rect(50, y2, 512, 12).fill('#2c5282');
+    doc2.fillColor('#ffffff').fontSize(6.5).text('Fees Breakdown', 55, y2 + 3, { bold: true });
+    y2 += 12;
+
+    feeSubData.forEach((row) => {
+      let col1Text = row[0] || row[1];
+      let col2Text = row[2] ? `${row[2]}: ${row[3]}` : '';
+      let col3Text = row[4] ? `${row[4]}: ${row[5]}` : '';
+      if (!col2Text && !col3Text) {
+        col2Text = row[1] || '';
+      }
+
+      const h1 = doc2.heightOfString(col1Text, { width: 150 });
+      const h2 = doc2.heightOfString(col2Text + col3Text, { width: 340 });
+      const rowHeight = Math.max(h1, h2, 11) + 4;
+
+      if (y2 + rowHeight > doc2.page.height - 80) {
+        doc2.addPage();
+        y2 = 50;
+      }
+
+      doc2.strokeColor('#e2e8f0').lineWidth(0.5);
+      doc2.rect(50, y2, 512, rowHeight).stroke();
+      doc2.moveTo(215, y2).lineTo(215, y2 + rowHeight).stroke();
+
+      doc2.fillColor('#334155').fontSize(6);
+      doc2.text(col1Text, 55, y2 + 2, { width: 155 });
+      doc2.text(col2Text ? `${col2Text}   ${col3Text}` : row[5] || '', 220, y2 + 2, { width: 285 });
+      y2 += rowHeight;
+    });
+
+    const part1Cont = [
+      ['9', 'Discount (INR)', 'INR 0.00'],
+      ['10', 'Annual Percentage Rate (APR) (%)', `${apr}%`],
+      ['11', 'Details of Contingent Charges (in INR or %, as applicable)', ''],
+      ['(i)', 'Penal charges, if any, in case of delayed payment', 'Refer to Annexure A'],
+      ['(ii)', 'Foreclosure / prepayment charge, if applicable', 'If the borrower opts to foreclose/prepay any installment after the look-up period, a charge of 4.5% of the principal amount prepaid plus GST shall be charged. Foreclosure option is available from the 2nd installment onwards.'],
+      ['(iii)', 'Charges for switching of loans from floating to fixed rate and vice versa', 'N/A'],
+      ['(iv)', 'Any other charges (please specify)', 'N/A']
+    ];
+
+    drawKfsRows(part1Cont);
+
+    y2 += 8;
+    doc2.fontSize(6).fillColor('#475569').text('*Autopay Maintenance Charge: Charged at a rate of INR 0 + GST per financial quarter, where a repayment is due for the loan and the maintenance charge is not already paid');
+    y2 = doc2.y + 14;
+
+    if (y2 > doc2.page.height - 180) {
+      doc2.addPage();
+      y2 = 50;
+    }
+
+    // Part 2
+    doc2.fontSize(10).fillColor('#1e3a8a').text('Part 2 (Other qualitative information)', 50, y2, { bold: true });
+    y2 += 14;
+
+    const part2Data = [
+      ['1', 'Clause of Loan agreement relating to engagement of recovery agents', 'Clause 4.4(d) of the loan agreement'],
+      ['2', 'Clause of Loan agreement which details grievance redressal mechanism', 'Clause 10.13 of the loan agreement'],
+      ['3', 'Phone number and email id of the nodal grievance redressal officer', 'Email: support@ppokket.com | Contact: 033 6645 2400'],
+      ['4', 'Whether the loan is, or in future maybe, subject to transfer to other REs or securitisation (Yes/ No)', 'yes'],
+      ['5', 'In case of lending under collaborative lending arrangements (co-lending/outsourcing):', 'N/A'],
+      ['6', 'In case of digital loans, following specific disclosures may be furnished:', ''],
+      ['(i)', 'Cooling off / look-up period, in terms of RE’s board approved policy', '24 hours from the time of loan disbursal. In case of prepayment during look up period the principal and proportionate APR without penalty shall be payable.'],
+      ['(ii)', 'Details of LSP acting as recovery agent and authorized to approach the borrower', 'For details of service provider and its agents etc. please refer to https://www.ppokket.com/lsp-dla'],
+      ['(iii)', 'Usage of payment instrument / mandate', 'It is hereby acknowledged by the Borrower that the payment instrument / mandate can be used by the Lender to collect all outstanding loan dues in full or part.']
+    ];
+
+    drawKfsRows(part2Data);
+    
+    // APR Computation Table
+    doc2.addPage();
+    y2 = 50;
+
+    doc2.fontSize(10).fillColor('#1e3a8a').text('APR Computation', 50, y2, { bold: true });
+    y2 += 16;
+
+    const firstDueDate = scheduleRows[0] ? getOrdinalDate(scheduleRows[0].due_date) : getOrdinalDate(new Date());
+
+    const aprData = [
+      ['1', 'Sanctioned Loan amount (in Rupees) (Sl no. 2 of the KFS template - Part 1)', formatINR(principal)],
+      ['2', 'Loan Term (in Months) (Sl No.4 of the KFS template - Part 1)', `${term}`],
+      ['a.', 'No. of instalments for payment of principal, in case of non-equated periodic loans', `${term}`],
+      ['b.', 'Type of EPI', 'N/A'],
+      ['', 'Amount of each EPI (in Rupees)', 'N/A'],
+      ['', 'Nos. of EPIs (e.g., no. of EMIs in case of monthly instalments)', 'N/A'],
+      ['c.', 'No. of instalments for payment of capitalised interest, if any', '—'],
+      ['d.', 'Commencement of repayments, post sanction (Sl No. 5 of the KFS template - Part 1)', 'Refer the repayment schedule'],
+      ['3', 'Interest rate type (fixed or floating or hybrid) (Sl No. 6 of the KFS template - Part 1)', 'Fixed'],
+      ['4', 'Rate of Interest (Sl No. 6 of the KFS template - Part 1)', `${annualizedROI}%`],
+      ['5', 'Total Interest Amount to be charged during the entire tenor of the loan', formatINR(interestAmount)],
+      ['6', 'Fee/ Charges payable (in Rupees)', formatINR(loan.processing_fee)],
+      ['a.', 'Payable to the RE (Sl No.8A of the KFS template-Part 1)', formatINR(loan.processing_fee)],
+      ['b.', 'Payable to third-party routed through RE (Sl No.8B of the KFS template - Part 1)', 'INR 0.00'],
+      ['7', 'Net disbursed amount (in Rupees)', formatINR(netDisbursal)],
+      ['8', 'Discount Amount (INR)', 'INR 0.00'],
+      ['9', 'Total amount to be paid by the borrower (sum of 1 and 5 minus 8)', formatINR(totalRepayable)],
+      ['10', 'Annual Percentage rate- Effective annualized interest rate (in percentage)', `${apr}%`],
+      ['11', 'Schedule of disbursement as per terms and conditions', '100% upfront'],
+      ['12', 'Due date of payment of instalment and interest', firstDueDate]
+    ];
+
+    drawKfsRows(aprData);
+    
+    // Repayment Schedule
+    doc2.addPage();
+    y2 = 50;
+
+    doc2.fontSize(10).fillColor('#1e3a8a').text('Repayment Schedule', 50, y2, { bold: true });
+    y2 += 16;
+
+    const repSchedHeaders = ['Instalment No.', 'Outstanding Principal', 'Principal (INR)', 'Interest (INR)', 'Discount (INR)', 'Instalment (INR)'];
+    const repSchedWidths = [60, 110, 85, 80, 75, 102];
+
+    doc2.rect(50, y2, 512, 14).fill('#1e3a8a');
+    doc2.fillColor('#ffffff').fontSize(7.5);
+    let schedX2 = 50;
+    repSchedHeaders.forEach((sh, idx) => {
+      doc2.text(sh, schedX2 + 4, y2 + 3, { width: repSchedWidths[idx] - 8, align: 'center', bold: true });
+      schedX2 += repSchedWidths[idx];
+    });
+    y2 += 14;
+
+    let outstandingBal = principal;
+    doc2.fillColor('#334155').fontSize(7);
+
+    scheduleRows.forEach((row) => {
+      doc2.strokeColor('#cbd5e1').lineWidth(0.5);
+      doc2.rect(50, y2, 512, 13).stroke();
+
+      const emiVal = parseFloat(row.emi_amount);
+      const prinVal = parseFloat(row.principal_amount);
+      const intVal = parseFloat(row.interest_amount);
+
+      const cells = [
+        row.installment_no,
+        formatINR(outstandingBal),
+        formatINR(prinVal),
+        formatINR(intVal),
+        'INR 0.00',
+        formatINR(emiVal)
+      ];
+
+      let cellX = 50;
+      cells.forEach((val, idx) => {
+        if (idx > 0) {
+          doc2.moveTo(cellX, y2).lineTo(cellX, y2 + 13).stroke();
+        }
+        doc2.text(String(val), cellX + 4, y2 + 3, { width: repSchedWidths[idx] - 8, align: 'center' });
+        cellX += repSchedWidths[idx];
+      });
+
+      outstandingBal = Math.max(0, outstandingBal - prinVal);
+      y2 += 13;
+    });
+
+    y2 += 10;
+    doc2.fontSize(7).fillColor('#475569').text('Calculation of interest is done on a monthly basis, number of days in a month being 30 and 360 days in a year.');
+    y2 = doc2.y + 14;
+
+    if (y2 > doc2.page.height - 200) {
+      doc2.addPage();
+      y2 = 50;
+    }
+
+    doc2.fontSize(10).fillColor('#1e3a8a').text('Annexure A: Annualized Penal Charge for Overdue Loans', 50, y2, { bold: true });
+    y2 += 14;
+
+    y2 = drawLatePaymentMatrix(doc2, y2);
+    y2 += 12;
+
+    doc2.fontSize(7).fillColor('#475569').text(`* The above annualized % is computed based on the maximum Late Payment Charges on the upper limit and considering the maximum no of days up to which it shall apply.\nIn case of payment after due date, the Annualised Rate of Interest of ${annualizedROI}% shall be charged till the actual date of payment.`);
+    y2 = doc2.y + 14;
+
+    if (y2 > doc2.page.height - 180) {
+      doc2.addPage();
+      y2 = 50;
+    }
+
+    doc2.fontSize(9.5).fillColor('#1e3a8a').text('(b). Bounce Charges', 50, y2, { bold: true });
+    y2 += 14;
+    doc2.fontSize(7.5).fillColor('#334155').text(`Rs. 150.00/- per installment\n${bounceChargesText}`, 50, y2, { width: 512, align: 'justify' });
+    y2 = doc2.y + 20;
+
+    if (y2 > doc2.page.height - 100) {
+      doc2.addPage();
+      y2 = 50;
+    }
+
+    doc2.fontSize(8.5).fillColor('#0f172a').text('Thanking You,\nFor PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', 50, y2, { bold: true });
+    y2 += 28;
+    doc2.fillColor('#22c55e').text('Digitally Signed', 50, y2);
+    y2 += 12;
+    doc2.fillColor('#64748b').fontSize(7.5).text(`Digitally Signed by Ppokket Financial Services Private Limited\nTimestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y2);
+
+    // Draw footers on KFS
+    const pages2 = doc2._pageBuffer;
+    pages2.forEach((_, idx) => {
+      doc2.switchToPage(idx);
+      drawFooter(doc2);
+    });
+
+    doc2.end();
+    await new Promise((resolve) => stream2.on('finish', resolve));
+
+    // ==========================================
+    // PDF 3: Sanction Letter & MITC
+    // ==========================================
+    const doc3 = new PDFDocument({ margin: 50, bufferPages: true });
+    const stream3 = fs.createWriteStream(pdf3Path);
+    doc3.pipe(stream3);
+
+    drawHeader(doc3, 'Sanction Letter & Most Important Terms & Conditions (MITC)');
+
+    let y3 = doc3.y + 10;
+    doc3.fontSize(9.5).fillColor('#0f172a');
+    doc3.text(`Date: ${agreementDate}`, 50, y3);
+    y3 += 14;
+    doc3.text(`Name of the Borrower: ${borrowerName}`, 50, y3);
+    y3 += 14;
+    doc3.text(`Address of the Borrower: ${borrowerAddress}`, 50, y3, { width: 512 });
+    y3 += 28;
+
+    doc3.text('Dear Sir/Madam,', 50, y3);
+    y3 += 18;
+    doc3.text('Sub: Sanction Letter', 50, y3, { bold: true });
+    y3 += 18;
+    doc3.text(`With reference to your application dated on ${agreementDate} for availing a loan for an amount of ${formatINR(principal)}, we are pleased to sanction the same subject to the terms and conditions as mentioned below and in the loan agreement to be executed.`, 50, y3, { width: 512 });
+    y3 += 45;
+
+    doc3.fontSize(11).fillColor('#1e3a8a').text('Particulars & Details', 50, y3, { bold: true });
+    y3 += 16;
+
+    const particularsRows = [
       ['Nature of Loan', 'Unsecured Personal Loan'],
       ['Principal Amount (INR)', formatINR(principal)],
       ['Annualized Rate of Interest (% Per Annum)', `${annualizedROI}%`],
@@ -158,10 +687,10 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       ['Total Repayment Amount', `The Total Repayment Amount is ${formatINR(totalRepayable)} and the term is ${term} Months.`],
       ['Fees and Charges', ''],
       ['Processing Fee + GST (INR)', formatINR(loan.processing_fee)],
-      ['Insurance charges + GST (if applicable)(INR)', 'INR 0'],
-      ['Other Product/Services + GST (if applicable)(INR)', 'INR 0'],
-      ['Repayment Fee (INR)', '0.1% of Repayment Amount'],
-      ['Foreclosure/Prepayment fee', 'If the borrower opts to foreclose/prepay any installment after the look-up period, a charge of 4.5% of the principal amount prepaid plus GST shall be charged. Foreclosure option is available from the 2nd installment onwards, excluding the immediate next due installment.'],
+      ['Insurance charges + GST (if applicable)', 'INR 0'],
+      ['Other Product/Services + GST (if applicable)', 'INR 0'],
+      ['Repayment Fee', '0.1% of Repayment Amount'],
+      ['Foreclosure/Prepayment fee', 'If the borrower opts to foreclose/prepay any installment after the look-up period, a charge of 4.5% of the principal amount prepaid plus GST shall be charged. Foreclosure option is available from the 2nd installment onwards.'],
       ['Repayment Convenience Charges', 'As per payment gateway charges'],
       ['Auto Pay Set Up Charge + GST (INR)', 'INR 0'],
       ['Auto Pay Maintenance Charge + GST (INR)', 'INR 0 (Charged at a rate of INR 0 + GST per financial quarter, where a repayment is due for the loan and the maintenance charge is not already paid)'],
@@ -175,146 +704,91 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       ['Look Up Period', '24 hours from the time of loan disbursal. Within this period, the borrower can foreclose by paying only the principal and proportionate APR without any foreclosure fee.']
     ];
 
-    // Header KFS Row
-    doc.rect(50, y, 512, 16).fill('#1e3a8a');
-    doc.fillColor('#ffffff').fontSize(8.5).text('Particulars', 55, y + 4, { bold: true });
-    doc.text('Details', 255, y + 4, { bold: true });
-    y += 16;
+    doc3.rect(50, y3, 512, 16).fill('#1e3a8a');
+    doc3.fillColor('#ffffff').fontSize(8.5).text('Particulars', 55, y3 + 4, { bold: true });
+    doc3.text('Details', 255, y3 + 4, { bold: true });
+    y3 += 16;
 
-    kfsData.forEach(([key, val]) => {
+    particularsRows.forEach(([key, val]) => {
       const isHeaderRow = val === '';
-      const keyHeight = doc.heightOfString(key, { width: 195 });
-      const valHeight = doc.heightOfString(val, { width: 300 });
+      const keyHeight = doc3.heightOfString(key, { width: 195 });
+      const valHeight = doc3.heightOfString(val, { width: 300 });
       const rowHeight = Math.max(keyHeight, valHeight) + 6;
 
-      if (y + rowHeight > doc.page.height - 40) {
-        doc.addPage();
-        y = 50;
-        // Redraw Header
-        doc.rect(50, y, 512, 16).fill('#1e3a8a');
-        doc.fillColor('#ffffff').fontSize(8.5).text('Particulars', 55, y + 4, { bold: true });
-        doc.text('Details', 255, y + 4, { bold: true });
-        y += 16;
+      if (y3 + rowHeight > doc3.page.height - 80) {
+        doc3.addPage();
+        y3 = 50;
+        doc3.rect(50, y3, 512, 16).fill('#1e3a8a');
+        doc3.fillColor('#ffffff').fontSize(8.5).text('Particulars', 55, y3 + 4, { bold: true });
+        doc3.text('Details', 255, y3 + 4, { bold: true });
+        y3 += 16;
       }
 
       if (isHeaderRow) {
-        doc.rect(50, y, 512, rowHeight).fill('#f1f5f9');
-        doc.fillColor('#0f172a').fontSize(8).text(key, 55, y + 4, { bold: true, width: 500 });
+        doc3.rect(50, y3, 512, rowHeight).fill('#f1f5f9');
+        doc3.fillColor('#0f172a').fontSize(8).text(key, 55, y3 + 4, { bold: true, width: 500 });
       } else {
-        doc.strokeColor('#e2e8f0').lineWidth(0.5);
-        doc.rect(50, y, 512, rowHeight).stroke();
-        doc.moveTo(250, y).lineTo(250, y + rowHeight).stroke();
+        doc3.strokeColor('#e2e8f0').lineWidth(0.5);
+        doc3.rect(50, y3, 512, rowHeight).stroke();
+        doc3.moveTo(250, y3).lineTo(250, y3 + rowHeight).stroke();
 
-        doc.fillColor('#1e293b').fontSize(7.5);
-        doc.text(key, 55, y + 3, { width: 190 });
-        doc.text(val, 255, y + 3, { width: 295 });
+        doc3.fillColor('#1e293b').fontSize(7.5);
+        doc3.text(key, 55, y3 + 3, { width: 190 });
+        doc3.text(val, 255, y3 + 3, { width: 295 });
       }
-      y += rowHeight;
+      y3 += rowHeight;
     });
 
-    // --- Late Payment Matrix ---
-    doc.addPage();
-    y = 50;
+    // Penal Charges table on next page
+    doc3.addPage();
+    y3 = 50;
 
-    doc.fontSize(11).fillColor('#1e3a8a').text('PART-II: LATE PAYMENT CHARGES MATRIX', 50, y, { bold: true });
-    y += 18;
+    doc3.fontSize(10).fillColor('#1e3a8a').text('Annualized Penal Charges Matrix', 50, y3, { bold: true });
+    y3 += 16;
+    y3 = drawLatePaymentMatrix(doc3, y3);
+    y3 += 12;
 
-    doc.fontSize(8).fillColor('#475569').text('An amount payable by the borrower on repayment post due date for each installment as tabled below:', 50, y);
-    y += 16;
+    doc3.fontSize(7).fillColor('#475569').text(`* The above annualized % is computed based on the maximum Late Payment Charges on the upper limit and considering the maximum no of days up to which it shall apply.\nIn case of payment after due date, the Annualised Rate of Interest of ${annualizedROI}% shall be charged till the actual date of payment.`);
+    y3 = doc3.y + 14;
 
-    const matrixHeaders = ['Lower', 'Upper', 'DPD 1-10', '11-20', '21-30', '31-40', '41-50', '51-60', '61+ (10d)', 'Max Chg', 'Max Days', 'Ann%'];
-    const matrixColWidths = [38, 38, 32, 32, 32, 32, 32, 32, 38, 45, 45, 46]; // Sum = 442 pt
+    if (y3 > doc3.page.height - 180) {
+      doc3.addPage();
+      y3 = 50;
+    }
 
-    const latePaymentRows = [
-      ['1', '100', '4', '3', '3', '2', '2', '2', '1', '40', '460', '32%'],
-      ['101', '250', '10', '8', '8', '5', '5', '5', '2', '100', '460', '32%'],
-      ['251', '500', '20', '15', '15', '10', '10', '10', '3', '200', '460', '32%'],
-      ['501', '1000', '40', '30', '30', '20', '20', '20', '6', '400', '460', '32%'],
-      ['1001', '1500', '60', '45', '45', '30', '30', '30', '9', '600', '460', '32%'],
-      ['1501', '2000', '80', '60', '60', '40', '40', '40', '12', '800', '460', '32%'],
-      ['2001', '2500', '100', '75', '75', '50', '50', '50', '15', '1000', '460', '32%'],
-      ['2501', '3000', '120', '90', '90', '60', '60', '60', '18', '1200', '460', '32%'],
-      ['3001', '3500', '140', '105', '105', '70', '70', '70', '21', '1400', '460', '32%'],
-      ['3501', '5000', '200', '150', '150', '100', '100', '100', '30', '2000', '460', '32%'],
-      ['5001', '7500', '300', '225', '225', '150', '150', '150', '45', '3000', '460', '32%'],
-      ['7501', '10000', '400', '300', '300', '200', '200', '200', '60', '4000', '460', '32%'],
-      ['10001', '12500', '500', '375', '375', '250', '250', '250', '75', '5000', '460', '32%'],
-      ['12501', '15000', '600', '450', '450', '300', '300', '300', '90', '6000', '460', '32%'],
-      ['15001', '17500', '700', '525', '525', '350', '350', '350', '105', '7000', '460', '32%'],
-      ['17501', '20000', '800', '600', '600', '400', '400', '400', '120', '8000', '460', '32%']
-    ];
+    doc3.fontSize(9.5).fillColor('#1e3a8a').text('(b). Bounce Charges', 50, y3, { bold: true });
+    y3 += 14;
+    doc3.fontSize(7.5).fillColor('#334155').text(`Rs. 150.00/- per installment\n${bounceChargesText}`, 50, y3, { width: 512, align: 'justify' });
+    y3 = doc3.y + 16;
 
-    // Draw header
-    doc.rect(50, y, 442, 14).fill('#1e3a8a');
-    doc.fillColor('#ffffff').fontSize(6.5).text('Installment Due (Rs)', 50, y + 4, { width: 76, align: 'center', bold: true });
-    doc.text('DPD Brackets & Charges (Rs)', 126, y + 4, { width: 192, align: 'center', bold: true });
-    doc.text('Limits', 318, y + 4, { width: 174, align: 'center', bold: true });
-    y += 14;
+    // Repayment Schedule
+    if (y3 > doc3.page.height - 160) {
+      doc3.addPage();
+      y3 = 50;
+    }
 
-    doc.rect(50, y, 442, 12).fill('#2c5282');
-    doc.fillColor('#ffffff').fontSize(6);
-    let curX = 50;
-    matrixHeaders.forEach((h, idx) => {
-      doc.text(h, curX + 2, y + 3, { width: matrixColWidths[idx] - 4, align: 'center' });
-      curX += matrixColWidths[idx];
+    doc3.fontSize(10).fillColor('#1e3a8a').text('Repayment Schedule', 50, y3, { bold: true });
+    y3 += 16;
+
+    const repSchedHeaders3 = ['Sl.', 'Repayment Date', 'Instalment Amount', 'Principal', 'Interest', 'Repayment Fee'];
+    const repSchedWidths3 = [40, 110, 100, 90, 80, 92];
+
+    doc3.rect(50, y3, 512, 16).fill('#1e3a8a');
+    doc3.fillColor('#ffffff').fontSize(8.5);
+    let schedX3 = 50;
+    repSchedHeaders3.forEach((sh, idx) => {
+      doc3.text(sh, schedX3 + 4, y3 + 4, { width: repSchedWidths3[idx] - 8, align: 'center', bold: true });
+      schedX3 += repSchedWidths3[idx];
     });
-    y += 12;
+    y3 += 16;
 
-    doc.fillColor('#334155').fontSize(5.5);
-    latePaymentRows.forEach((row) => {
-      doc.strokeColor('#cbd5e1').lineWidth(0.5);
-      doc.rect(50, y, 442, 11).stroke();
-
-      let cellX = 50;
-      row.forEach((cell, idx) => {
-        if (idx > 0) {
-          doc.moveTo(cellX, y).lineTo(cellX, y + 11).stroke();
-        }
-        doc.text(String(cell), cellX + 1, y + 3, { width: matrixColWidths[idx] - 2, align: 'center' });
-        cellX += matrixColWidths[idx];
-      });
-      y += 11;
-    });
-
-    y += 12;
-    doc.fontSize(7.5).fillColor('#475569');
-    doc.text('* The above annualized % is computed based on the maximum Penal Charges on the upper limit and considering the maximum no of days upto which it shall apply.');
-    doc.text(`- In case of payment after due date, the Annualised Rate of Interest of ${annualizedROI}% shall be charged till the actual date of payment.`);
-    y += 24;
-
-    // --- Bounce & Penal Rules ---
-    doc.fontSize(9.5).fillColor('#1e3a8a').text('Bounce & Overdue Charge Rules', { bold: true });
-    y += 12;
-    const rulesText = `Bounce Charges: Rs. 150.00/- per installment. Bounce Charges shall mean penal charges for dishonor of any payment instrument / mandate resulting into non-payment of installment on their respective due date. Bounce charge which are penal in nature will be applicable only once for each installment. If a payment is not made by the due date (or within grace period of 1 day), due to dishonor of a payment instrument / mandate, bounce charges will be levied on 2 day(s) after the due date. Penal Charge shall mean sum of Bounce Charge and Late Payment Charge. Overdue charge shall mean sum of Interest after Due Date (IADD) and Penal Charge. Overdue Amount shall mean sum of Installment amount and Overdue Charge. For any installment that is overdue, the Overdue Charge will start applying. The Overdue Charges, mentioned above, will accumulate till the Overdue Amount becomes twice the installment amount. Once the overdue Amount reaches a value of twice the installment amount, the Penal Charges will be progressively reduced to zero such that the Overdue Amount does not exceed twice the instalment amount, while IADD will continue to accrue. Once the applicable IADD becomes equal to the installment amount, the IADD will accrue at 24% per annum. Under any circumstances, the Overdue Amount shall not exceed three times the installment amount.`;
-    
-    doc.fontSize(7.5).fillColor('#334155').text(rulesText, 50, y, { width: 512, align: 'justify' });
-    
-    // --- Repayment Schedule ---
-    doc.addPage();
-    y = 50;
-
-    doc.fontSize(11).fillColor('#1e3a8a').text('PART-III: LOAN REPAYMENT SCHEDULE', 50, y, { bold: true });
-    y += 18;
-
-    const scheduleHeaders = ['Sl.', 'Repayment Date', 'Instalment Amount', 'Principal', 'Interest', 'Repayment Fee'];
-    const schedColWidths = [40, 110, 100, 90, 80, 92]; // Sum = 512
-
-    doc.rect(50, y, 512, 16).fill('#1e3a8a');
-    doc.fillColor('#ffffff').fontSize(8.5);
-    let schedX = 50;
-    scheduleHeaders.forEach((sh, idx) => {
-      doc.text(sh, schedX + 4, y + 4, { width: schedColWidths[idx] - 8, align: 'center', bold: true });
-      schedX += schedColWidths[idx];
-    });
-    y += 16;
-
-    doc.fontSize(8).fillColor('#334155');
+    doc3.fontSize(8).fillColor('#334155');
     scheduleRows.forEach((row) => {
-      doc.strokeColor('#e2e8f0').lineWidth(0.5);
-      doc.rect(50, y, 512, 14).stroke();
+      doc3.strokeColor('#e2e8f0').lineWidth(0.5);
+      doc3.rect(50, y3, 512, 14).stroke();
 
       const emi = parseFloat(row.emi_amount);
-      const repFee = (emi * 0.001);
+      const repFee = emi * 0.001;
 
       const cells = [
         row.installment_no,
@@ -328,38 +802,37 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       let cellX = 50;
       cells.forEach((val, idx) => {
         if (idx > 0) {
-          doc.moveTo(cellX, y).lineTo(cellX, y + 14).stroke();
+          doc3.moveTo(cellX, y3).lineTo(cellX, y3 + 14).stroke();
         }
-        doc.text(String(val), cellX + 4, y + 3, { width: schedColWidths[idx] - 8, align: 'center' });
-        cellX += schedColWidths[idx];
+        doc3.text(String(val), cellX + 4, y3 + 3, { width: repSchedWidths3[idx] - 8, align: 'center' });
+        cellX += repSchedWidths3[idx];
       });
-      y += 14;
+      y3 += 14;
     });
 
-    y += 12;
-    doc.fontSize(7.5).fillColor('#475569');
-    doc.text('Calculation of interest is done on a monthly basis, number of days in a month being 30 and 360 days in a year.');
-    y += 24;
+    y3 += 10;
+    doc3.fontSize(7.5).fillColor('#475569');
+    doc3.text('Calculation of interest is done on a monthly basis, number of days in a month being 30 and 360 days in a year.');
+    y3 += 14;
 
-    // Miscellaneous
     const miscData = [
       ['Charges pursuant to Addendum Agreement', 'As to be agreed in the Addendum Agreement'],
       ['Governing Law and Jurisdiction', 'Kolkata, West Bengal']
     ];
 
     miscData.forEach(([key, val]) => {
-      doc.fontSize(8.5).fillColor('#0f172a');
-      doc.text(`${key}: `, { bold: true, continued: true });
-      doc.text(val, { bold: false });
-      y += 14;
+      doc3.fontSize(8.5).fillColor('#0f172a');
+      doc3.text(`${key}: `, { bold: true, continued: true });
+      doc3.text(val, { bold: false });
+      y3 += 14;
     });
 
-    // --- Terms & Conditions ---
-    doc.addPage();
-    y = 50;
+    // Terms and Conditions on next page
+    doc3.addPage();
+    y3 = 50;
 
-    doc.fontSize(11).fillColor('#1e3a8a').text('PART-IV: TERMS & CONDITIONS', 50, y, { bold: true });
-    y += 18;
+    doc3.fontSize(11).fillColor('#1e3a8a').text('Terms & Conditions:', 50, y3, { bold: true });
+    y3 += 18;
 
     const terms = [
       '1. These are the Most Important Terms & Conditions of the aforesaid Loan, and all other terms and conditions of the Loan shall be as specified in the Loan Agreement.',
@@ -380,38 +853,35 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       '16. Representations and Warranties: Usual and customary for transactions of this nature, including but not limited to maintenance of existence, notices of default, compliance with applicable laws, and payment of taxes.'
     ];
 
-    doc.fontSize(7).fillColor('#334155');
+    doc3.fontSize(7).fillColor('#334155');
     terms.forEach(term => {
-      if (y > doc.page.height - 40) {
-        doc.addPage();
-        y = 50;
+      if (y3 > doc3.page.height - 40) {
+        doc3.addPage();
+        y3 = 50;
       }
-      doc.text(term, 50, y, { width: 512, align: 'justify' });
-      y += doc.heightOfString(term, { width: 512 }) + 4;
+      doc3.text(term, 50, y3, { width: 512, align: 'justify' });
+      y3 += doc3.heightOfString(term, { width: 512 }) + 4;
     });
 
-    // --- SMA/NPA Classification ---
-    if (y > doc.page.height - 180) {
-      doc.addPage();
-      y = 50;
+    // SMA/NPA Classification
+    if (y3 > doc3.page.height - 180) {
+      doc3.addPage();
+      y3 = 50;
     }
 
-    doc.moveDown(1);
-    y = doc.y;
-    doc.fontSize(11).fillColor('#1e3a8a').text('PART-V: SMA / NPA ASSET CLASSIFICATION', 50, y, { bold: true });
-    y += 18;
+    doc3.moveDown(1);
+    y3 = doc3.y;
+    doc3.fontSize(11).fillColor('#1e3a8a').text('SMA / NPA ASSET CLASSIFICATION', 50, y3, { bold: true });
+    y3 += 16;
 
-    doc.fontSize(7.5).fillColor('#334155').text('Overdue loan accounts shall be classified as Special Mention Accounts (SMA) or Non-performing Assets (NPA) as per RBI regulations indicated below:', 50, y);
-    y += 14;
+    doc3.fontSize(7.5).fillColor('#334155').text('Overdue loan accounts shall be classified as Special Mention Accounts (SMA) or Non-performing Assets (NPA) as per RBI regulations indicated below:', 50, y3);
+    y3 += 14;
 
-    const smaHeaders = ['Overdue Classification', 'Period'];
-    const smaColWidths = [200, 312];
-
-    doc.rect(50, y, 512, 14).fill('#1e3a8a');
-    doc.fillColor('#ffffff').fontSize(7.5);
-    doc.text('Overdue Classification', 55, y + 3, { bold: true });
-    doc.text('Period', 255, y + 3, { bold: true });
-    y += 14;
+    doc3.rect(50, y3, 512, 14).fill('#1e3a8a');
+    doc3.fillColor('#ffffff').fontSize(7.5);
+    doc3.text('Overdue Classification', 55, y3 + 3, { bold: true });
+    doc3.text('Period', 255, y3 + 3, { bold: true });
+    y3 += 14;
 
     const smaRows = [
       ['SMA-0', 'For a period upto 30 days'],
@@ -420,54 +890,59 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       ['NPA*', 'For a period more than 90 days']
     ];
 
-    doc.fillColor('#334155').fontSize(7);
+    doc3.fillColor('#334155').fontSize(7);
     smaRows.forEach(([cl, prd]) => {
-      doc.strokeColor('#e2e8f0').lineWidth(0.5);
-      doc.rect(50, y, 512, 12).stroke();
-      doc.moveTo(250, y).lineTo(250, y + 12).stroke();
+      doc3.strokeColor('#e2e8f0').lineWidth(0.5);
+      doc3.rect(50, y3, 512, 12).stroke();
+      doc3.moveTo(250, y3).lineTo(250, y3 + 12).stroke();
 
-      doc.text(cl, 55, y + 2);
-      doc.text(prd, 255, y + 2);
-      y += 12;
+      doc3.text(cl, 55, y3 + 2);
+      doc3.text(prd, 255, y3 + 2);
+      y3 += 12;
     });
 
-    y += 8;
-    doc.fontSize(7).fillColor('#475569');
-    doc.text('* Upgradation of accounts classified as NPAs: Loan account once classified as NPA can be upgraded as standard only after entire arrears of principal, interest and any other amount are paid by the borrower.');
+    y3 += 8;
+    doc3.fontSize(7).fillColor('#475569');
+    doc3.text('* Upgradation of accounts classified as NPAs: Loan account once classified as NPA can be upgraded as standard only after entire arrears of principal, interest and any other amount are paid by the borrower.');
     
-    y += 12;
+    y3 += 12;
     const illustText = 'Illustration for Classification of borrower\'s account as SMA/NPA: If Due date of a Loan account repayment is March 31, 202X, and full dues are not received by the lender on this date, the date of overdue shall be March 31, 202X. If it continues to remain overdue, then this account shall get tagged as SMA-1 upon the day-end of April 30, 202X (i.e. upon completion of 30 days). Similarly, if it remains overdue, it shall get tagged as SMA-2 upon the day-end of May 30, 202X and NPA upon the day-end of June 30, 202X.';
-    doc.text(illustText, 50, y, { width: 512, align: 'justify' });
-    y += doc.heightOfString(illustText, { width: 512 }) + 14;
+    doc3.text(illustText, 50, y3, { width: 512, align: 'justify' });
+    y3 += doc3.heightOfString(illustText, { width: 512 }) + 14;
 
-    if (y > doc.page.height - 100) {
-      doc.addPage();
-      y = 50;
+    if (y3 > doc3.page.height - 100) {
+      doc3.addPage();
+      y3 = 50;
     }
 
-    doc.strokeColor('#e2e8f0').lineWidth(1).moveTo(50, y).lineTo(562, y).stroke();
-    y += 14;
+    doc3.strokeColor('#e2e8f0').lineWidth(1).moveTo(50, y3).lineTo(562, y3).stroke();
+    y3 += 14;
 
-    doc.fontSize(9.5).fillColor('#1e3a8a').text('Digitally Signed by Ppokket Financial Services Private Limited', 50, y, { bold: true });
-    y += 14;
-    doc.fontSize(8.5).fillColor('#475569').text(`Timestamp: ${new Date().toLocaleString('en-IN')}`, 50, y);
-    doc.text(`Borrower Digital Consent IP: Verified & Logged via Click-wrap`, 50, y + 12);
+    doc3.fontSize(9.5).fillColor('#1e3a8a').text('Digitally Signed by Ppokket Financial Services Private Limited', 50, y3, { bold: true });
+    y3 += 14;
+    doc3.fontSize(8.5).fillColor('#475569').text(`Timestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y3);
+    doc3.text(`Borrower Digital Consent IP: Verified & Logged via Click-wrap`, 50, y3 + 12);
 
-    // Finalize PDF
-    doc.end();
+    // Draw footers on Sanction Letter
+    const pages3 = doc3._pageBuffer;
+    pages3.forEach((_, idx) => {
+      doc3.switchToPage(idx);
+      drawFooter(doc3);
+    });
 
-    // Wait for file stream to finish writing
-    await new Promise((resolve) => stream.on('finish', resolve));
-    console.log(` PDF saved locally at: ${pdfPath}`);
+    doc3.end();
+    await new Promise((resolve) => stream3.on('finish', resolve));
 
-    // Send email
+    // ==========================================
+    // Send Email with 3 Attachments
+    // ==========================================
     const transporter = await getTransporter();
     if (!transporter) {
-      console.log('⚠️ Could not create transporter. Skipping email send (check SMTP configs).');
+      console.log('⚠️ Could not create transporter. Skipping email send.');
       return;
     }
 
-    // --- HTML Repayment Schedule for Email ---
+    // HTML Repayment Schedule for Email
     let scheduleHtml = '';
     scheduleRows.forEach(row => {
       const emi = parseFloat(row.emi_amount);
@@ -487,7 +962,7 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
     const mailOptions = {
       from: '"Ppokket Financial Services" <ppokket.noreply@gmail.com>',
       to: emailRecipient,
-      subject: `Loan Agreement & Sanction Letter - Loan Ref: LREF_${loan.id} 📄`,
+      subject: `Your Signed Loan Agreements & Sanction Letter - Loan Ref: LREF_${loan.id} 📄`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 25px;">
@@ -500,31 +975,36 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
           <p style="font-size: 14px; margin: 4px 0;">Borrower Address: <span style="color: #475569;">${borrowerAddress}</span></p>
           
           <p style="margin-top: 20px; font-size: 15px;">Dear Sir/Madam,</p>
-          <p style="font-size: 15px; font-weight: bold; color: #1e3a8a; margin-top: 5px;">Sub: Sanction Letter</p>
+          <p style="font-size: 15px; font-weight: bold; color: #1e3a8a; margin-top: 5px;">Sub: Digital Loan Documents & Sanction Letter</p>
           
           <p style="font-size: 14px; color: #334155;">
-            With reference to your application dated on <strong>${agreementDate}</strong> for availing a loan for an amount of <strong>${formatINR(principal)}</strong>, we are pleased to sanction the same subject to the terms and conditions as mentioned below and in the loan agreement to be executed.
+            Thank you for choosing Ppokket. Your withdrawal request for <strong>${formatINR(principal)}</strong> has been successfully registered. In compliance with RBI guidelines, your digitally signed loan agreements have been generated. We have attached the following three critical documents to this email:
           </p>
+          
+          <ol style="font-size: 13.5px; color: #1e293b; padding-left: 20px;">
+            <li><strong>Acknowledgement of Loan Application</strong>: Contains your formal application details and borrower declaration.</li>
+            <li><strong>Key Facts Statement (KFS)</strong>: Standardized sheet detailing all interest rates, processing fees, APR, and qualitative disclosures.</li>
+            <li><strong>Sanction Letter & MITC</strong>: The official credit approval sheet with complete terms, conditions, and SMA/NPA asset classification guidelines.</li>
+          </ol>
 
-          <h3 style="color: #1e3a8a; font-size: 15px; border-bottom: 1.5px solid #1e3a8a; padding-bottom: 5px; margin-top: 25px;">PART-I: KEY FACT STATEMENT (KFS)</h3>
+          <h3 style="color: #1e3a8a; font-size: 15px; border-bottom: 1.5px solid #1e3a8a; padding-bottom: 5px; margin-top: 25px;">PART-I: KEY FACT STATEMENT (KFS) OVERVIEW</h3>
           <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0;">
             <tr style="background-color: #1e3a8a; color: white;">
               <th style="padding: 8px 12px; text-align: left; border-radius: 4px 0 0 0;">Particulars</th>
               <th style="padding: 8px 12px; text-align: right; border-radius: 0 4px 0 0;">Details</th>
             </tr>
-            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Nature of Loan</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">Unsecured Personal Loan</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Principal Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(principal)}</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Annualized Rate of Interest</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${annualizedROI}% Per Annum</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Annualized Effective Rate of Interest</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${effectiveROI}% Per Annum</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Interest Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(interestAmount)}</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Loan Term / Number of Repayments</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${term} Months (${term} Installments)</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Processing Fee + GST (Upfront)</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(loan.processing_fee)}</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Net Disbursed Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(netDisbursal)}</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Total Repayable Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(totalRepayable)}</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Annualized Percentage Rate (APR) %</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${apr}% Per Annum</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Principal Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(principal)}</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Annualized Rate of Interest</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${annualizedROI}% Per Annum</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Annualized Effective Rate of Interest</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${effectiveROI}% Per Annum</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Interest Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(interestAmount)}</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Loan Term / Repayments</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${term} Months (${term} Installments)</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Processing Fee + GST</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(loan.processing_fee)}</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Net Disbursed Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(netDisbursal)}</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Total Repayable Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(totalRepayable)}</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Annualized Percentage Rate (APR) %</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${apr}% Per Annum</td></tr>
           </table>
 
-          <h3 style="color: #1e3a8a; font-size: 15px; border-bottom: 1.5px solid #1e3a8a; padding-bottom: 5px; margin-top: 25px;">PART-III: LOAN REPAYMENT SCHEDULE</h3>
+          <h3 style="color: #1e3a8a; font-size: 15px; border-bottom: 1.5px solid #1e3a8a; padding-bottom: 5px; margin-top: 25px;">LOAN REPAYMENT SCHEDULE</h3>
           <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin: 12px 0;">
             <tr style="background-color: #1e3a8a; color: white;">
               <th style="padding: 8px 12px; text-align: center;">Sl.</th>
@@ -541,14 +1021,10 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
             Your loan will be disbursed shortly to your registered bank account: <strong>${bank.bank_name} ending in ****${bank.account_number.slice(-4)}</strong>.
           </p>
 
-          <p style="font-size: 13px; color: #334155; margin-top: 20px;">
-            The detailed Sanction Letter and Most Important Terms & Conditions (MITC) containing the late payment charges matrix, bounce charge rules, and full terms are attached to this email as a PDF document.
-          </p>
-
           <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 25px 0;" />
 
           <p style="font-size: 13px; font-weight: bold; color: #1e3a8a; margin: 0;">Digitally Signed by Ppokket Financial Services Private Limited</p>
-          <p style="font-size: 12px; color: #64748b; margin: 2px 0 0 0;">Timestamp: ${new Date().toLocaleString('en-IN')}</p>
+          <p style="font-size: 12px; color: #64748b; margin: 2px 0 0 0;">Timestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}</p>
           
           <p style="font-size: 11px; color: #94a3b8; margin-top: 30px; line-height: 1.4;">
             This is an automated notification. Please do not reply directly to this email. For any queries, write to us at support@ppokket.com.
@@ -557,8 +1033,16 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       `,
       attachments: [
         {
-          filename: `Sanction_Letter_LREF_${loan.id}.pdf`,
-          path: pdfPath
+          filename: `1_Acknowledgement_Loan_Ref_${loan.id}.pdf`,
+          path: pdf1Path
+        },
+        {
+          filename: `2_Key_Facts_Statement_Loan_Ref_${loan.id}.pdf`,
+          path: pdf2Path
+        },
+        {
+          filename: `3_Sanction_Letter_Loan_Ref_${loan.id}.pdf`,
+          path: pdf3Path
         }
       ]
     };
@@ -571,9 +1055,12 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       console.log(`🔗 Ethereal Email Preview Link: ${previewUrl}`);
     }
 
-    // Delete temp file after sending
-    fs.unlink(pdfPath, (err) => {
-      if (err) console.error('Failed to clean up temp PDF file:', err);
+    // Delete temp files after sending
+    const paths = [pdf1Path, pdf2Path, pdf3Path];
+    paths.forEach(p => {
+      fs.unlink(p, (err) => {
+        if (err) console.error(`Failed to clean up temp PDF file ${p}:`, err);
+      });
     });
 
   } catch (err) {
