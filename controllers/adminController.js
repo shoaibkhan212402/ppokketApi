@@ -28,7 +28,10 @@ const getAdminDashboard = async (req, res) => {
       [[pendingKYC]] = await pool.query("SELECT COUNT(*) as count FROM kyc_documents kd JOIN users u ON u.id = kd.user_id WHERE kd.status = 'pending' AND u.assigned_partner_id = ?", [req.admin.id]);
 
       [recentLoans] = await pool.query(
-        `SELECT l.*, u.full_name, u.mobile FROM loans l
+        `SELECT l.*, u.full_name, u.mobile,
+                (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
+                (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date
+         FROM loans l
          JOIN users u ON u.id = l.user_id
          WHERE u.assigned_partner_id = ?
          ORDER BY l.created_at DESC LIMIT 10`,
@@ -68,7 +71,10 @@ const getAdminDashboard = async (req, res) => {
       [[pendingKYC]] = await pool.query("SELECT COUNT(*) as count FROM kyc_documents WHERE status = 'pending'");
 
       [recentLoans] = await pool.query(
-        `SELECT l.*, u.full_name, u.mobile FROM loans l
+        `SELECT l.*, u.full_name, u.mobile,
+                (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
+                (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date
+         FROM loans l
          JOIN users u ON u.id = l.user_id
          ORDER BY l.created_at DESC LIMIT 10`
       );
@@ -219,7 +225,9 @@ const getAllLoans = async (req, res) => {
     let query = `
       SELECT l.*, u.full_name, u.mobile, u.email, 
              COALESCE(u.credit_score, u.experian_score) AS credit_score,
-             u.occupation, u.monthly_income
+             u.occupation, u.monthly_income,
+             (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
+             (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date
       FROM loans l
       JOIN users u ON u.id = l.user_id
     `;
@@ -429,7 +437,7 @@ const processLoan = async (req, res) => {
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [loan.user_id,
         '🎉 Withdrawal Approved!',
-      `Your withdrawal of ₹${finalAmount} has been approved at ${finalRate}% per month for ${finalMonths} months. EMI: ₹${finalEMI}/mo. First EMI due: ${schedule[0]?.due_date || 'TBD'}.`,
+      `Your withdrawal of ₹${finalAmount} has been approved at ${finalRate}% per month for ${finalMonths} months. Next EMI: ₹${schedule[0]?.emi_amount || finalEMI} due: ${schedule[0]?.due_date || 'TBD'}.`,
         'loan']
     );
 
@@ -439,7 +447,7 @@ const processLoan = async (req, res) => {
     const [userRow] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [loan.user_id]);
     if (userRow[0]?.fcm_token) {
       await sendNotification(userRow[0].fcm_token, '🎉 Withdrawal Approved!',
-        `₹${finalAmount} approved. EMI: ₹${finalEMI}/mo.`);
+        `₹${finalAmount} approved. Next EMI: ₹${schedule[0]?.emi_amount || finalEMI} due ${schedule[0]?.due_date || 'TBD'}.`);
     }
 
     await invalidateUserCache(loan.user_id);

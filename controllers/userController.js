@@ -171,6 +171,16 @@ const updateProfile = async (req, res) => {
     const [userRow] = await pool.query('SELECT is_kyc_verified, pan_verified, aadhaar_verified, full_name as old_name, email as old_email, date_of_birth as old_dob, occupation as old_occ, monthly_income as old_inc, pan_number as old_pan, aadhaar_number as old_aadhaar FROM users WHERE id = ?', [req.user.id]);
     const u = userRow[0] || {};
     
+    // Check for PAN lock violation
+    if (u.pan_verified && pan_number !== undefined && pan_number !== null && pan_number.trim().toUpperCase() !== (u.old_pan ? u.old_pan.trim().toUpperCase() : '')) {
+      return res.status(400).json({ success: false, message: 'Verified PAN details cannot be changed.' });
+    }
+
+    // Check for Aadhaar lock violation
+    if (u.aadhaar_verified && aadhaar_number !== undefined && aadhaar_number !== null && String(aadhaar_number).trim() !== (u.old_aadhaar ? String(u.old_aadhaar).trim() : '')) {
+      return res.status(400).json({ success: false, message: 'Verified Aadhaar details cannot be changed.' });
+    }
+
     let final_pan = pan_number;
     let final_aadhaar = aadhaar_number;
     let final_name = full_name;
@@ -178,25 +188,6 @@ const updateProfile = async (req, res) => {
     let final_dob = formattedDob;
     let final_occ = occupation;
     let final_inc = monthly_income;
-
-    // Individual locks
-    if (u.pan_verified && pan_number && pan_number.toUpperCase() !== u.old_pan) {
-      final_pan = u.old_pan; 
-    }
-    if (u.aadhaar_verified && aadhaar_number && aadhaar_number !== u.old_aadhaar) {
-      final_aadhaar = u.old_aadhaar;
-    }
-
-    // Full KYC lock
-    if (u.is_kyc_verified) {
-      final_name = u.old_name;
-      final_email = u.old_email;
-      final_dob = u.old_dob;
-      final_occ = u.old_occ;
-      final_inc = u.old_inc;
-      final_pan = u.old_pan;
-      final_aadhaar = u.old_aadhaar;
-    }
 
     await pool.query(
       `UPDATE users SET
