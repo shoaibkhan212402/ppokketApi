@@ -6,25 +6,46 @@ const { sendNotification } = require('../utils/fcm');
 // POST /api/payment/create-order
 const createOrder = async (req, res) => {
   try {
-    const { loan_id, amount, emi_id } = req.body;
-    const amountVal = amount || emi_id;
+    const { loan_id, amount, emi_id, is_settlement } = req.body;
     const userId = req.user.id;
 
-    if (!loan_id || !amountVal) {
-      return res.status(400).json({ success: false, message: 'loan_id and amount required' });
+    if (!loan_id) {
+      return res.status(400).json({ success: false, message: 'loan_id required' });
     }
 
-    // Verify loan belongs to user and is active (disbursed)
-    const [loan] = await pool.query(
-      'SELECT * FROM loans WHERE id = ? AND user_id = ? AND status = "disbursed"',
+    // Verify loan belongs to user
+    const [loanRows] = await pool.query(
+      'SELECT * FROM loans WHERE id = ? AND user_id = ?',
       [loan_id, userId]
     );
-    if (!loan.length) {
-      // Debug: check what status the loan actually has
-      const [debug] = await pool.query('SELECT id, status FROM loans WHERE id = ? AND user_id = ?', [loan_id, userId]);
-      const actualStatus = debug.length ? debug[0].status : 'NOT_FOUND';
-      console.log(`[createOrder] Rejected loan ${loan_id} — actual status: ${actualStatus}`);
-      return res.status(404).json({ success: false, message: `Loan not found or not active (status: ${actualStatus})` });
+    if (!loanRows.length) {
+      return res.status(404).json({ success: false, message: 'Loan not found' });
+    }
+    const loan = loanRows[0];
+
+    if (loan.status !== 'disbursed') {
+      return res.status(400).json({ success: false, message: `Loan status is ${loan.status}. Payment requires disbursed status.` });
+    }
+
+    let amountVal;
+    let descriptionText;
+    let paymentType = 'emi';
+
+    if (is_settlement) {
+      if (loan.settlement_amount === null || loan.settlement_amount === undefined) {
+        return res.status(400).json({ success: false, message: 'No active settlement offer found for this loan.' });
+      }
+      amountVal = parseFloat(loan.settlement_amount);
+      descriptionText = `Settlement payment for loan #${loan_id}`;
+      paymentType = 'settlement';
+    } else {
+      const regularAmount = amount || emi_id;
+      if (!regularAmount) {
+        return res.status(400).json({ success: false, message: 'amount required' });
+      }
+      amountVal = regularAmount;
+      descriptionText = `EMI payment for loan #${loan_id}`;
+      paymentType = 'emi';
     }
 
     const [userRow] = await pool.query('SELECT full_name, mobile, email FROM users WHERE id = ?', [userId]);
@@ -77,8 +98,8 @@ const createOrder = async (req, res) => {
     // Save pending transaction
     await pool.query(
       `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, amount, type, status, description)
-       VALUES (?, ?, ?, ?, 'emi', 'pending', ?)`,
-      [userId, loan_id, orderId, amountVal, `EMI payment for loan #${loan_id}`]
+       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
+      [userId, loan_id, orderId, amountVal, paymentType, descriptionText]
     );
 
     res.json({
@@ -174,29 +195,54 @@ const verifyPayment = async (req, res) => {
 
     // Update loan amount_paid
     const paidAmount = txn[0].amount;
-    await conn.query(
-      `UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?`,
-      [paidAmount, loan_id]
-    );
+    
+    if (txn[0].type === 'settlement') {
+      // Settle the loan: mark the loan as fully paid and status = 'closed'
+      await conn.query(
+        `UPDATE loans SET amount_paid = amount_paid + ?, status = 'closed' WHERE id = ?`,
+        [paidAmount, loan_id]
+      );
+      // Deactivate mandate on loan close
+      await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [userId]);
+      // Mark all upcoming or overdue EMIs as paid (settled)
+      await conn.query(
+        `UPDATE emi_schedule SET status = 'paid', paid_amount = emi_amount, paid_at = NOW()
+         WHERE loan_id = ? AND status IN ('upcoming', 'overdue')`,
+        [loan_id]
+      );
+      
+      // Notification
+      await conn.query(
+        'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+        [userId, 'Loan Settled Successfully 🎉', `Your loan #${loan_id} has been settled and closed successfully. Thank you!`, 'payment']
+      );
+    } else {
+      // Normal EMI payment
+      await conn.query(
+        `UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?`,
+        [paidAmount, loan_id]
+      );
 
-    // Mark EMI as paid
-    await conn.query(
-      `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
-       WHERE loan_id = ? AND status IN ('upcoming', 'overdue') ORDER BY due_date ASC LIMIT 1`,
-      [paidAmount, loan_id]
-    );
+      // Mark EMI as paid
+      await conn.query(
+        `UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW()
+         WHERE loan_id = ? AND status IN ('upcoming', 'overdue') ORDER BY due_date ASC LIMIT 1`,
+        [paidAmount, loan_id]
+      );
 
-    // Check if loan fully paid
-    const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
-    if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
-      await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
+      // Check if loan fully paid
+      const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
+      if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+        await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
+        await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [userId]);
+      }
+      
+      // Notification
+      await conn.query(
+        'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+        [userId, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received. Payment ID: ${paymentId}`, 'payment']
+      );
     }
-
-    // Notification
-    await conn.query(
-      'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [userId, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received. Payment ID: ${paymentId}`, 'payment']
-    );
 
     await conn.commit();
     conn.release();
@@ -320,6 +366,7 @@ const handleWebhook = async (req, res) => {
         const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
         if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
           await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
+          await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [userId]);
         }
 
         // Notification

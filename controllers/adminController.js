@@ -1514,8 +1514,46 @@ const getAuditLog = async (req, res) => {
   }
 };
 
+// PUT /api/admin/loans/:id/settlement
+const setLoanSettlement = async (req, res) => {
+  try {
+    const loanId = req.params.id;
+    const { settlement_amount } = req.body; // number or null
+
+    // Update in DB
+    const [result] = await pool.query(
+      'UPDATE loans SET settlement_amount = ? WHERE id = ?',
+      [settlement_amount !== null && settlement_amount !== undefined ? parseFloat(settlement_amount) : null, loanId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: 'Loan not found' });
+    }
+
+    // Insert notification for user
+    const [loan] = await pool.query('SELECT user_id, amount FROM loans WHERE id = ?', [loanId]);
+    if (loan.length && settlement_amount !== null && settlement_amount !== undefined) {
+      await pool.query(
+        'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+        [
+          loan[0].user_id,
+          'Special One-Time Settlement Offer 🎁',
+          `Settlement offer created for your active loan. Pay a flat ₹${settlement_amount} to close your loan immediately. Check the dashboard.`,
+          'loan'
+        ]
+      );
+    }
+
+    res.json({ success: true, message: 'Settlement offer updated successfully' });
+  } catch (err) {
+    console.error('[setLoanSettlement]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 module.exports = {
   getAdminDashboard, getAllUsers, getAllLoans,
+  setLoanSettlement,
   approveLoan, rejectLoan, disburseLoan,
   processLoan, previewEMI, setWithdrawalLimit,
   getPendingKYC, reviewKYC,

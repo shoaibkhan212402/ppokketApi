@@ -12,20 +12,9 @@ const getUserCreditDetails = async (userId, creditLimit, withdrawalLimit) => {
   
   let occupiedCredit = 0;
   for (const loan of loans) {
-    if (loan.status === 'closed') {
-      const fullyPaid = Number(loan.amount_paid || 0) >= Number(loan.total_payable || 1);
-      if (!fullyPaid) {
-        // occupied credit is outstanding principal
-        occupiedCredit += 0;
-      }
-    } else {
-      const [emiRows] = await pool.query(
-        `SELECT IFNULL(SUM(principal_amount), 0) AS principal_paid FROM emi_schedule WHERE loan_id = ? AND status = 'paid'`,
-        [loan.id]
-      );
-      const principalPaid = parseFloat(emiRows[0]?.principal_paid || 0);
-      const occupied = Math.max(0, parseFloat(loan.amount) - principalPaid);
-      occupiedCredit += occupied;
+    if (loan.status !== 'closed') {
+      // For any active/non-closed loan, the full loan amount remains occupied
+      occupiedCredit += parseFloat(loan.amount || 0);
     }
   }
 

@@ -391,4 +391,23 @@ const getMandateStatus = async (req, res) => {
   }
 };
 
-module.exports = { createMandate, verifyMandate, deactivateMandate, getMandateStatus };
+const reactivateMandate = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [mandateRows] = await pool.query('SELECT * FROM bank_mandates WHERE user_id = ? AND status = "inactive"', [userId]);
+    if (!mandateRows.length) {
+      return res.status(404).json({ success: false, message: 'No inactive mandate found to reactivate.' });
+    }
+    await pool.query("UPDATE bank_mandates SET status = 'active' WHERE user_id = ?", [userId]);
+    await pool.query(
+      'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+      [userId, 'Auto-Pay Reactivated 🏦', 'Your previous Auto-Pay mandate has been reactivated successfully.', 'payment']
+    );
+    res.json({ success: true, message: 'Mandate reactivated successfully.' });
+  } catch (err) {
+    console.error('[reactivateMandate]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { createMandate, verifyMandate, deactivateMandate, getMandateStatus, reactivateMandate };

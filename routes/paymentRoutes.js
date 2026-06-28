@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { createOrder, verifyPayment, getPaymentHistory, handleWebhook, initiateRefund, cancelPayment } = require('../controllers/paymentController');
-const { createMandate, verifyMandate, deactivateMandate, getMandateStatus } = require('../controllers/mandateController');
+const { createMandate, verifyMandate, deactivateMandate, getMandateStatus, reactivateMandate } = require('../controllers/mandateController');
 const { protect, adminProtect, requirePermission } = require('../middleware/auth');
 
 router.post('/create-order', protect, createOrder);
@@ -16,5 +16,6 @@ router.post('/mandate/create',     protect, createMandate);
 router.post('/mandate/verify',     protect, verifyMandate);
 router.post('/mandate/deactivate', protect, deactivateMandate);
 router.get('/mandate/status',      protect, getMandateStatus);
+router.post('/mandate/reactivate', protect, reactivateMandate);
 
 module.exports = router;

@@ -78,6 +78,18 @@ const markOverdueAndCalcPenalty = async () => {
          )`
     );
 
+    // Set mandates to inactive for users who have no active/disbursed loans
+    await conn.query(
+      `UPDATE bank_mandates m
+          SET m.status = 'inactive'
+        WHERE m.status = 'active'
+          AND NOT EXISTS (
+            SELECT 1 FROM loans l
+             WHERE l.user_id = m.user_id
+               AND l.status IN ('disbursed', 'approved', 'withdrawal_requested')
+          )`
+    );
+
     await conn.commit();
     console.log(`[cron] Penalty job complete — ${overdue.length} overdue EMIs processed`);
   } catch (err) {
@@ -238,6 +250,7 @@ const processAutoDebits = async () => {
           const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [emi.loan_id]);
           if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
             await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [emi.loan_id]);
+            await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [emi.user_id]);
           }
 
           // Send confirmation notifications

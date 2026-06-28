@@ -22,6 +22,7 @@ const {
   updateLeadStatus, getLeadKycDetails,
   // Audit
   getAuditLog,
+  setLoanSettlement,
 } = require('../controllers/adminController');
 const { adminProtect, requireSuperAdmin, requirePermission } = require('../middleware/auth');
 const {
@@ -61,6 +62,7 @@ router.put('/users/:userId/toggle-status', requirePermission('manage_users'), to
 router.put('/users/:userId/withdrawal-limit', requirePermission('manage_users'), setWithdrawalLimit);
 router.get('/loans', requirePermission('manage_loans'), getAllLoans);
 router.get('/loans/:id/emi-schedule', requirePermission('manage_loans'), getLoanEMISchedule);
+router.put('/loans/:id/settlement', requirePermission('manage_loans'), setLoanSettlement);
 router.put('/approve-loan/:id', requirePermission('manage_loans'), approveLoan);
 router.put('/process-loan/:id', requirePermission('manage_loans'), processLoan);
 router.get('/preview-emi', requirePermission('manage_loans'), previewEMI);

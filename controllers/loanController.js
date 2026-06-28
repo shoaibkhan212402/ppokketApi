@@ -18,7 +18,7 @@ const applyLoan = async (req, res) => {
 
     // Check existing active loan
     const [existing] = await pool.query(
-      'SELECT id FROM loans WHERE user_id = ? AND status IN ("pending","under_review","approved","disbursed","withdrawal_requested")',
+      'SELECT id FROM loans WHERE user_id = ? AND status IN ("pending","under_review","approved","withdrawal_requested")',
       [userId]
     );
     if (existing.length) {
