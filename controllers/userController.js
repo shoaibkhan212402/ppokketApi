@@ -2,6 +2,7 @@ const { pool } = require('../config/db');
 const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { sendNotification } = require('../utils/fcm');
 const { verifyBankAccount, verifyIFSC, compareName } = require('../utils/bankVerify');
+const { sendWelcomeEmail } = require('../utils/email');
 
 // Dynamic revolving credit calculation helper
 const getUserCreditDetails = async (userId, creditLimit, withdrawalLimit) => {
@@ -211,6 +212,13 @@ const updateProfile = async (req, res) => {
     user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
     user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
     user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+
+    // Send welcome email the first time a user sets their email address
+    const isFirstEmail = !u.old_email && final_email;
+    if (isFirstEmail) {
+      sendWelcomeEmail({ user: { ...user, mobile: user.mobile, referral_code: user.referral_code } })
+        .catch(() => {});
+    }
 
     await invalidateUserCache(req.user.id);
     res.json({ success: true, message: 'Profile updated', user });

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { pool } = require('../config/db');
 const { sendNotification } = require('../utils/fcm');
+const { invalidateUserCache } = require('../config/redis');
 
 // POST /api/payment/create-order
 const createOrder = async (req, res) => {
@@ -247,6 +248,9 @@ const verifyPayment = async (req, res) => {
     await conn.commit();
     conn.release();
 
+    // Bust dashboard + user cache so Home/PayEMI show fresh data immediately
+    await invalidateUserCache(userId).catch(() => {});
+
     const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]);
     if (user[0]?.fcm_token) {
       sendNotification(user[0].fcm_token, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received.`, { screen: 'Loans' }).catch(() => {});
@@ -377,6 +381,8 @@ const handleWebhook = async (req, res) => {
 
         await conn.commit();
         conn.release();
+        // Bust dashboard cache so Home/PayEMI refresh immediately
+        await invalidateUserCache(userId).catch(() => {});
       } catch (dbErr) {
         try {
           await conn.rollback();

@@ -960,7 +960,7 @@ I hereby further confirm that I understand English Language and agree that all t
     });
 
     const mailOptions = {
-      from: '"Ppokket Financial Services" <ppokket.noreply@gmail.com>',
+      from: `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`,
       to: emailRecipient,
       subject: `Your Signed Loan Agreements & Sanction Letter - Loan Ref: LREF_${loan.id} 📄`,
       html: `
@@ -1068,4 +1068,73 @@ I hereby further confirm that I understand English Language and agree that all t
   }
 };
 
-module.exports = { sendLoanAgreementEmail };
+// ==========================================
+// Welcome / Registration Email
+// ==========================================
+const sendWelcomeEmail = async ({ user }) => {
+  try {
+    if (!user?.email) return;
+
+    const transporter = await getTransporter();
+    if (!transporter) {
+      console.log('⚠️ No transporter. Skipping welcome email.');
+      return;
+    }
+
+    const name = user.full_name && user.full_name !== 'Ppokket User' ? user.full_name : 'Valued Customer';
+    const from = `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`;
+
+    const info = await transporter.sendMail({
+      from,
+      to: user.email,
+      subject: 'Welcome to Ppokket — Your Account is Ready! 🎉',
+      html: `
+        <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
+          <div style="text-align: center; margin-bottom: 28px;">
+            <h2 style="color: #1e3a8a; margin: 0; font-size: 22px; font-weight: bold;">PPOKKET FINANCIAL SERVICES PRIVATE LIMITED</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 4px 0 0 0;">Partnered with RBI-registered NBFCs</p>
+          </div>
+
+          <p style="font-size: 15px;">Dear <strong>${name}</strong>,</p>
+
+          <p style="font-size: 14px; color: #334155;">
+            Welcome to <strong>Ppokket</strong>! Your account has been successfully registered. We are excited to have you on board.
+          </p>
+
+          <div style="background: #f0f7ff; border-left: 4px solid #2563eb; border-radius: 8px; padding: 16px 20px; margin: 20px 0;">
+            <p style="font-size: 14px; font-weight: bold; color: #1e3a8a; margin: 0 0 8px 0;">Getting Started — Next Steps</p>
+            <ol style="font-size: 13.5px; color: #334155; padding-left: 18px; margin: 0;">
+              <li style="margin-bottom: 6px;"><strong>Complete Your KYC</strong> — Upload PAN, Aadhaar, and bank details to unlock your credit limit.</li>
+              <li style="margin-bottom: 6px;"><strong>Check Your Credit Score</strong> — Get your free Experian credit score instantly after KYC.</li>
+              <li style="margin-bottom: 6px;"><strong>Apply for a Loan</strong> — Once your credit limit is assigned, withdraw funds in minutes.</li>
+            </ol>
+          </div>
+
+          <p style="font-size: 14px; color: #334155;">
+            Your mobile number <strong>+91 ${user.mobile}</strong> is your Ppokket login. No passwords needed — just verify with OTP anytime.
+          </p>
+
+          <div style="background: #f8fafc; border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 13px; color: #475569;">
+            <p style="margin: 0 0 4px 0;"><strong>Registered Mobile:</strong> +91 ${user.mobile}</p>
+            <p style="margin: 0 0 4px 0;"><strong>Referral Code:</strong> ${user.referral_code || '—'}</p>
+            <p style="margin: 0;">Share your referral code with friends to earn credit limit bonuses!</p>
+          </div>
+
+          <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 25px 0;" />
+          <p style="font-size: 12px; color: #94a3b8;">
+            For any queries, reach us at <a href="mailto:support@ppokket.com" style="color: #2563eb;">support@ppokket.com</a> or WhatsApp us at +91 8076 813 446.<br/>
+            This is an automated email — please do not reply directly.
+          </p>
+        </div>
+      `,
+    });
+
+    console.log(`✉️ Welcome email sent to ${user.email}. MessageId: ${info.messageId}`);
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) console.log(`🔗 Ethereal preview: ${previewUrl}`);
+  } catch (err) {
+    console.error('❌ Failed to send welcome email:', err.message);
+  }
+};
+
+module.exports = { sendLoanAgreementEmail, sendWelcomeEmail };
