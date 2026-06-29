@@ -1,5 +1,4 @@
 const nodemailer = require('nodemailer');
-const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../config/db');
@@ -168,6 +167,7 @@ const bounceChargesText = `Bounce Charges shall mean penal charges for dishonor 
  * Generates a loan agreement PDF and sends it via email to the user
  */
 const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
+  const PDFDocument = require('pdfkit');
   try {
     const emailRecipient = user.email || 'customer@ppokket.com';
     console.log(` Generating Agreement PDFs for ${user.full_name} (${emailRecipient})...`);

@@ -12,11 +12,14 @@ CREATE TABLE IF NOT EXISTS users (
   email             VARCHAR(191) UNIQUE,
   pan_number        VARCHAR(10),
   aadhaar_number    VARCHAR(12),
+  full_address      VARCHAR(500) DEFAULT NULL,
   aadhaar_ref_id    VARCHAR(100) DEFAULT NULL,
   date_of_birth     DATE,
   occupation        VARCHAR(100),
   monthly_income    DECIMAL(12,2),
-  credit_score      INT DEFAULT 650,
+  credit_score      INT DEFAULT NULL,
+  experian_score    INT DEFAULT NULL,
+  experian_fetched_at DATETIME DEFAULT NULL,
   credit_limit      DECIMAL(12,2) DEFAULT 10000.00,
   withdrawal_limit  DECIMAL(12,2) DEFAULT NULL,  -- NULL = same as credit_limit; set lower to cap withdrawal
   wallet_balance    DECIMAL(12,2) DEFAULT 0.00,
@@ -97,11 +100,16 @@ CREATE TABLE IF NOT EXISTS loans (
   first_emi_pct   DECIMAL(5,2) DEFAULT NULL,
   processing_fee_in_first_emi TINYINT(1) DEFAULT NULL,
   total_payable   DECIMAL(12,2) NOT NULL,
+  penalty_rate    DECIMAL(5,2) DEFAULT 1.00,
+  settlement_amount DECIMAL(12,2) DEFAULT NULL,
   amount_paid     DECIMAL(12,2) DEFAULT 0.00,
   purpose         VARCHAR(255),
-  status          ENUM('pending','under_review','approved','rejected','disbursed','closed') DEFAULT 'pending',
+  status          ENUM('pending','under_review','approved','withdrawal_requested','rejected','disbursed','closed') DEFAULT 'pending',
   approved_by     INT,
   disbursed_at    TIMESTAMP NULL,
+  agreement_accepted    TINYINT(1) DEFAULT 0,
+  agreement_accepted_at DATETIME DEFAULT NULL,
+  disburse_confirmed    TINYINT(1) DEFAULT 0,
   approved_at     TIMESTAMP NULL,
   rejected_reason TEXT,
   next_emi_date   DATE,
@@ -119,7 +127,10 @@ CREATE TABLE IF NOT EXISTS transactions (
   razorpay_payment_id VARCHAR(200),
   razorpay_signature  VARCHAR(500),
   amount              DECIMAL(12,2) NOT NULL,
-  type                ENUM('credit','debit','emi','refund','cashback') NOT NULL,
+  cashfree_order_id   VARCHAR(100) DEFAULT NULL,
+  cashfree_payment_id VARCHAR(100) DEFAULT NULL,
+  emi_no              INT DEFAULT NULL,
+  type                ENUM('credit','debit','emi','refund','cashback','settlement') NOT NULL,
   status              ENUM('pending','success','failed') DEFAULT 'pending',
   description         VARCHAR(500),
   receipt_url         VARCHAR(500),
@@ -183,7 +194,21 @@ CREATE TABLE IF NOT EXISTS bank_details (
   ifsc_code      VARCHAR(20),
   bank_name      VARCHAR(100),
   account_type   ENUM('savings','current') DEFAULT 'savings',
-  is_verified    TINYINT(1) DEFAULT 0,
+  ifsc_bank_name VARCHAR(150) DEFAULT NULL,
+  branch         VARCHAR(100) DEFAULT NULL,
+  branch_address VARCHAR(255) DEFAULT NULL,
+  city           VARCHAR(100) DEFAULT NULL,
+  state          VARCHAR(100) DEFAULT NULL,
+  micr           VARCHAR(20)  DEFAULT NULL,
+  swift          VARCHAR(20)  DEFAULT NULL,
+  contact        VARCHAR(50)  DEFAULT NULL,
+  neft           TINYINT(1)   DEFAULT NULL,
+  rtgs           TINYINT(1)   DEFAULT NULL,
+  imps           TINYINT(1)   DEFAULT NULL,
+  upi            TINYINT(1)   DEFAULT NULL,
+  ifsc_verified  TINYINT(1)   DEFAULT 0,
+  ifsc_request_id VARCHAR(100) DEFAULT NULL,
+  is_verified    TINYINT(1)   DEFAULT 0,
   created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -215,6 +240,8 @@ CREATE TABLE IF NOT EXISTS emi_schedule (
   principal_amount DECIMAL(12,2),
   interest_amount  DECIMAL(12,2),
   paid_amount      DECIMAL(12,2) DEFAULT 0.00,
+  penalty_amount   DECIMAL(10,2) DEFAULT 0.00,
+  penalty_days     INT DEFAULT 0,
   status           ENUM('upcoming','paid','overdue') DEFAULT 'upcoming',
   paid_at          TIMESTAMP NULL,
   FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE,
@@ -237,6 +264,7 @@ CREATE TABLE IF NOT EXISTS bank_mandates (
   subscription_id  VARCHAR(100) NOT NULL UNIQUE,
   plan_id          VARCHAR(100) DEFAULT NULL,
   mandate_id       VARCHAR(100) DEFAULT NULL,
+  sub_reference_id VARCHAR(100) DEFAULT NULL,
   umrn             VARCHAR(100) DEFAULT NULL,
   status           ENUM('pending', 'active', 'failed', 'cancelled') DEFAULT 'pending',
   auth_link        TEXT DEFAULT NULL,
@@ -245,6 +273,73 @@ CREATE TABLE IF NOT EXISTS bank_mandates (
   updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- CIBIL REPORTS TABLE
+CREATE TABLE IF NOT EXISTS cibil_reports (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  pan VARCHAR(20) NOT NULL,
+  mobile VARCHAR(15) NOT NULL,
+  name VARCHAR(255) NULL,
+  loanId VARCHAR(255) NULL,
+  loanType VARCHAR(255) NULL,
+  userId INT NULL,
+  cibilScore INT NULL,
+  creditHealth VARCHAR(50) NULL,
+  populationRank INT NULL,
+  htmlUrl TEXT NULL,
+  parsedData JSON NULL,
+  rawResponse JSON NULL,
+  status VARCHAR(50) DEFAULT 'Fetched',
+  apiProvider VARCHAR(50) DEFAULT 'InsightAPI',
+  errorMessage TEXT NULL,
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX (pan),
+  INDEX (mobile),
+  INDEX (userId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- EXPERIAN REPORTS TABLE
+CREATE TABLE IF NOT EXISTS experian_reports (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  pan VARCHAR(20) NOT NULL,
+  mobile VARCHAR(15) NOT NULL,
+  name VARCHAR(255) NULL,
+  loanId VARCHAR(255) NULL,
+  loanType VARCHAR(255) NULL,
+  userId INT NULL,
+  experianScore INT NULL,
+  creditHealth VARCHAR(50) NULL,
+  htmlUrl TEXT NULL,
+  parsedData JSON NULL,
+  rawResponse JSON NULL,
+  status VARCHAR(50) DEFAULT 'Fetched',
+  apiProvider VARCHAR(50) DEFAULT 'InsightAPI_Experian',
+  errorMessage TEXT NULL,
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX (pan),
+  INDEX (mobile),
+  INDEX (userId),
+  INDEX (loanId, loanType)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- SYSTEM SETTINGS TABLE
+CREATE TABLE IF NOT EXISTS system_settings (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  setting_key VARCHAR(100) NOT NULL UNIQUE,
+  setting_value TEXT NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Default system settings
+INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES
+  ('first_emi_principal_pct',    '25'),
+  ('gst_on_processing_fee',      '18'),
+  ('processing_fee_in_first_emi','true'),
+  ('step_down_emi_enabled',      'true'),
+  ('penalty_rate',               '1'),
+  ('grace_period_days',          '1');
 
 -- INDEXES
 CREATE INDEX idx_users_mobile           ON users(mobile);

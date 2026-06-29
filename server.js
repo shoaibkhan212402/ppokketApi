@@ -66,7 +66,7 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Body parsing — capture raw body for Razorpay webhook signature verification
+// Body parsing — capture raw body for payment webhook signature verification
 app.use(express.json({
   limit: '10mb',
   verify: (req, _res, buf, encoding) => {
@@ -127,33 +127,7 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-// Don't expose internal error details in production
-app.use((err, req, res, _next) => {
-  const isProd = process.env.NODE_ENV === 'production';
-  console.error('❌ Unhandled error:', err.stack);
-  res.status(err.status || 500).json({
-    success: false,
-    message: isProd ? 'Internal Server Error' : (err.message || 'Internal Server Error'),
-  });
-});
-
-connectDB().then(async (dbConnected) => {
-  if (dbConnected) {
-    try {
-      const { initCibilTable } = require('./controllers/cibilController');
-      await initCibilTable();
-      console.log('✅ CIBIL table check completed');
-      
-      const { initExperianTable } = require('./controllers/experianController');
-      await initExperianTable();
-      console.log('✅ Experian table check completed');
-    } catch (tableErr) {
-      console.error('❌ Failed to run table initialization:', tableErr);
-    }
-  } else {
-    console.warn('⚠️ Deferring table initialization due to database connection failure.');
-  }
-
+connectDB().then(async () => {
   await connectRedis();
   registerJobs();
   app.listen(PORT, () => {
