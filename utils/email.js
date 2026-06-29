@@ -961,8 +961,10 @@ I hereby further confirm that I understand English Language and agree that all t
 
     const mailOptions = {
       from: `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`,
+      replyTo: 'support@ppokket.com',
       to: emailRecipient,
-      subject: `Your Signed Loan Agreements & Sanction Letter - Loan Ref: LREF_${loan.id} 📄`,
+      subject: `Your Loan Documents are Ready — Ppokket (Ref: ${loan.id})`,
+      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | 033 6645 2400\n\nPpokket Financial Services Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 25px;">
@@ -1086,8 +1088,10 @@ const sendWelcomeEmail = async ({ user }) => {
 
     const info = await transporter.sendMail({
       from,
+      replyTo: 'support@ppokket.com',
       to: user.email,
-      subject: 'Welcome to Ppokket — Your Account is Ready! 🎉',
+      subject: 'Welcome to Ppokket — Your Account is Ready',
+      text: `Dear ${name},\n\nWelcome to Ppokket! Your account has been successfully registered.\n\nNext Steps:\n1. Complete Your KYC — Upload PAN, Aadhaar, and bank details to unlock your credit limit.\n2. Check Your Credit Score — Get your free Experian credit score instantly after KYC.\n3. Apply for a Loan — Once your credit limit is assigned, withdraw funds in minutes.\n\nYour login: +91 ${user.mobile} (OTP-based, no password needed)\nReferral Code: ${user.referral_code || '—'}\n\nFor support: support@ppokket.com | WhatsApp: +91 8076 813 446\n\nPpokket Financial Services Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 28px;">

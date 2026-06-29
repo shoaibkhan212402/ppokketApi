@@ -231,9 +231,13 @@ const verifyPayment = async (req, res) => {
         [paidAmount, loan_id]
       );
 
-      // Check if loan fully paid
-      const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
-      if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+      // Check if loan fully closed — count remaining unpaid/non-waived EMIs
+      const [[{ remaining }]] = await conn.query(
+        `SELECT COUNT(*) AS remaining FROM emi_schedule
+          WHERE loan_id = ? AND status NOT IN ('paid', 'waived')`,
+        [loan_id]
+      );
+      if (remaining === 0) {
         await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
         await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [userId]);
       }
@@ -366,9 +370,13 @@ const handleWebhook = async (req, res) => {
           [amount, loan_id]
         );
 
-        // Check if loan fully paid
-        const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [loan_id]);
-        if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+        // Check if loan fully closed — count remaining unpaid/non-waived EMIs
+        const [[{ remaining }]] = await conn.query(
+          `SELECT COUNT(*) AS remaining FROM emi_schedule
+            WHERE loan_id = ? AND status NOT IN ('paid', 'waived')`,
+          [loan_id]
+        );
+        if (remaining === 0) {
           await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [loan_id]);
           await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [userId]);
         }

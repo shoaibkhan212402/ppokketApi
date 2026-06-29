@@ -4,22 +4,22 @@ const { sendNotification } = require('../utils/fcm');
 const { verifyBankAccount, verifyIFSC, compareName } = require('../utils/bankVerify');
 const { sendWelcomeEmail } = require('../utils/email');
 
-// Dynamic revolving credit calculation helper
+// Fixed credit calculation: occupied = original loan amount until fully closed.
+// Paying EMIs does NOT increase available credit — only loan closure frees it.
 const getUserCreditDetails = async (userId, creditLimit, withdrawalLimit) => {
   const [loans] = await pool.query(
-    `SELECT id, amount, status, total_payable, amount_paid FROM loans WHERE user_id = ? AND status != 'rejected'`,
+    `SELECT id, amount, status FROM loans WHERE user_id = ? AND status NOT IN ('rejected', 'closed')`,
     [userId]
   );
-  
+
   let occupiedCredit = 0;
   for (const loan of loans) {
-    if (loan.status !== 'closed') {
-      // For any active/non-closed loan, the full loan amount remains occupied
-      occupiedCredit += parseFloat(loan.amount || 0);
-    }
+    occupiedCredit += parseFloat(loan.amount || 0);
   }
 
-  const effectiveLimit = withdrawalLimit !== null ? Math.min(parseFloat(creditLimit), parseFloat(withdrawalLimit)) : parseFloat(creditLimit);
+  const effectiveLimit = withdrawalLimit !== null
+    ? Math.min(parseFloat(creditLimit), parseFloat(withdrawalLimit))
+    : parseFloat(creditLimit);
   const availableCredit = Math.max(0, effectiveLimit - occupiedCredit);
 
   return { occupiedCredit, availableCredit };

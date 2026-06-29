@@ -67,14 +67,18 @@ const markOverdueAndCalcPenalty = async () => {
       );
     }
 
-    // Step 3 — mark closed loans where all EMIs are paid
+    // Step 3 — mark closed loans where all EMIs are paid or waived
     await conn.query(
       `UPDATE loans l
          SET l.status = 'closed'
        WHERE l.status = 'disbursed'
          AND NOT EXISTS (
            SELECT 1 FROM emi_schedule e
-           WHERE e.loan_id = l.id AND e.status != 'paid'
+           WHERE e.loan_id = l.id AND e.status NOT IN ('paid', 'waived')
+         )
+         AND EXISTS (
+           SELECT 1 FROM emi_schedule e2
+           WHERE e2.loan_id = l.id
          )`
     );
 
@@ -246,9 +250,13 @@ const processAutoDebits = async () => {
             [emi.emi_amount, emi.emi_id]
           );
 
-          // Check if loan closed
-          const [loan] = await conn.query('SELECT amount_paid, total_payable FROM loans WHERE id = ?', [emi.loan_id]);
-          if (loan[0] && loan[0].amount_paid >= loan[0].total_payable) {
+          // Check if loan fully closed — count remaining unpaid/non-waived EMIs
+          const [[{ remaining }]] = await conn.query(
+            `SELECT COUNT(*) AS remaining FROM emi_schedule
+              WHERE loan_id = ? AND status NOT IN ('paid', 'waived')`,
+            [emi.loan_id]
+          );
+          if (remaining === 0) {
             await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [emi.loan_id]);
             await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [emi.user_id]);
           }

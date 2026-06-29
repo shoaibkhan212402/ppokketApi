@@ -32,16 +32,30 @@ async function deleteUserById(userId, userName) {
   console.log(`✅ Deleted ${userName} (ID: ${userId}) and all related records.`);
 }
 
+async function deleteUserByMobile(mobile) {
+  const [rows] = await pool.query('SELECT id, full_name, mobile FROM users WHERE mobile = ?', [mobile]);
+  if (!rows.length) {
+    console.log(`⚠️  No user found with mobile ${mobile} — skipping.`);
+    return;
+  }
+  const { id, full_name } = rows[0];
+  await deleteUserById(id, full_name || mobile);
+}
+
 async function main() {
   try {
-    const targets = [
+    // Delete Rahul Rai accounts by ID
+    const byId = [
       { id: 17, name: 'RAHUL RAI' },
       { id: 25, name: 'Rahul Rai New' },
     ];
 
-    for (const t of targets) {
+    for (const t of byId) {
       await deleteUserById(t.id, t.name);
     }
+
+    // Delete user by mobile number
+    await deleteUserByMobile('7310249234');
 
     console.log('\n✅ Done!\n');
     process.exit(0);
