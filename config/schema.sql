@@ -336,7 +336,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
 INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES
   ('first_emi_principal_pct',    '25'),
   ('gst_on_processing_fee',      '18'),
-  ('processing_fee_in_first_emi','true'),
+  ('processing_fee_in_first_emi','false'),
   ('step_down_emi_enabled',      'true'),
   ('penalty_rate',               '1'),
   ('grace_period_days',          '1');
