@@ -49,30 +49,37 @@ try {
     throw new Error('Firebase credentials missing or incomplete in environment.');
   }
 } catch (err) {
+  console.error('❌ Firebase Admin init failed:', err.message);
 
-  // Provide mock firebase admin helper for test environments
-  firebaseAdmin = {
-    auth: () => ({
-      verifyIdToken: async (token) => {
-
-        // If testing, we return a mock user payload based on token
-        return {
-          phone_number: token.startsWith('+') ? token : '+919999999999',
-          uid: 'mock_firebase_uid_12345'
-        };
-      }
-    }),
-    messaging: () => ({
-      send: async (payload) => {
-
-        return 'mock_message_id';
-      },
-      sendEachForMulticast: async (payload) => {
-
-        return { successCount: payload.tokens.length, failureCount: 0 };
-      }
-    })
-  };
+  if (process.env.NODE_ENV === 'production') {
+    // Fail closed in production: never hand out a mock verifier that would
+    // rubber-stamp any token as authenticated. Callers of `.messaging()` in
+    // utils/fcm.js already wrap calls in try/catch, so push notifications
+    // will just no-op with a logged error instead of silently faking auth.
+    console.error('❌ Firebase Admin unavailable in production — push notifications will be disabled. Fix FIREBASE_* env vars.');
+    firebaseAdmin = null;
+  } else {
+    // Mock firebase admin helper for local/dev environments only
+    firebaseAdmin = {
+      auth: () => ({
+        verifyIdToken: async (token) => {
+          // If testing, we return a mock user payload based on token
+          return {
+            phone_number: token.startsWith('+') ? token : '+919999999999',
+            uid: 'mock_firebase_uid_12345'
+          };
+        }
+      }),
+      messaging: () => ({
+        send: async (payload) => {
+          return 'mock_message_id';
+        },
+        sendEachForMulticast: async (payload) => {
+          return { successCount: payload.tokens.length, failureCount: 0 };
+        }
+      })
+    };
+  }
 }
 
 module.exports = firebaseAdmin;

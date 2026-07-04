@@ -9,6 +9,10 @@ const getCashfreeConfig = () => {
   const cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
   const isMock = !appId || appId.includes('placeholder') || !secretKey || secretKey.includes('placeholder');
 
+  if (isMock && process.env.NODE_ENV === 'production') {
+    console.error('⚠️  [mandateController] CASHFREE_APP_ID/CASHFREE_SECRET_KEY missing or placeholder in PRODUCTION — Auto-Pay mandates are running in MOCK mode. Fix env vars immediately.');
+  }
+
   const baseUrl = cfEnv === 'production' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com';
 
   return { appId, secretKey, cfEnv, isMock, baseUrl };

@@ -15,6 +15,21 @@ const REDIS_USER = process.env.REDIS_USER || 'default';
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD || '';
 
 const run = async () => {
+  // Safety guard: this script drops every table. Require explicit,
+  // hard-to-fat-finger confirmation before it can run against production.
+  if (process.env.NODE_ENV === 'production') {
+    const confirmation = process.env.CONFIRM_PRODUCTION_RESET;
+    if (confirmation !== `RESET ${DB_NAME}`) {
+      console.error(
+        `❌ Refusing to reset database "${DB_NAME}" — NODE_ENV=production.\n` +
+        `   This would DROP ALL TABLES. If you are absolutely sure, re-run with:\n` +
+        `   CONFIRM_PRODUCTION_RESET="RESET ${DB_NAME}" node config/reset-db.js`
+      );
+      process.exit(1);
+    }
+    console.warn(`⚠️  Production reset confirmed for "${DB_NAME}" — proceeding.`);
+  }
+
   console.log('🔄 Resetting database:', DB_NAME);
 
   const connection = await mysql.createConnection({

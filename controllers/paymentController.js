@@ -56,8 +56,14 @@ const createOrder = async (req, res) => {
     let paymentSessionId = null;
     let cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
     let isMock = true;
+    const isProduction = process.env.NODE_ENV === 'production';
+    const cashfreeConfigured = process.env.CASHFREE_APP_ID && !process.env.CASHFREE_APP_ID.includes('placeholder');
 
-    if (process.env.CASHFREE_APP_ID && !process.env.CASHFREE_APP_ID.includes('placeholder')) {
+    if (isProduction && !cashfreeConfigured) {
+      return res.status(500).json({ success: false, message: 'Payment gateway is not configured. Please contact support.' });
+    }
+
+    if (cashfreeConfigured) {
       const url = cfEnv === 'production' ? 'https://api.cashfree.com/pg/orders' : 'https://sandbox.cashfree.com/pg/orders';
       try {
         const response = await axios.post(url, {
@@ -71,7 +77,7 @@ const createOrder = async (req, res) => {
             customer_name: user.full_name || 'Customer'
           },
           order_meta: {
-            return_url: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Loan+History&order_id={order_id}`
+            return_url: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=My+Loans&order_id={order_id}`
           }
         }, {
           headers: {
@@ -88,7 +94,13 @@ const createOrder = async (req, res) => {
           isMock = false;
         }
       } catch (err) {
-        console.warn('Cashfree PG order creation failed, falling back to mock:', err.response?.data || err.message);
+        console.error('Cashfree PG order creation failed:', err.response?.data || err.message);
+        // Fail closed in production: a transient gateway error must never
+        // silently downgrade to a mock order that later auto-verifies as paid.
+        if (isProduction) {
+          return res.status(502).json({ success: false, message: 'Payment gateway is temporarily unavailable. Please try again shortly.' });
+        }
+        console.warn('Falling back to mock order (non-production only).');
       }
     }
 
@@ -129,6 +141,14 @@ const verifyPayment = async (req, res) => {
     let isMock = orderId.startsWith('order_mock');
     let paymentId = isMock ? `pay_mock_${Date.now()}` : '';
     let isPaid = false;
+
+    if (isMock && process.env.NODE_ENV === 'production') {
+      // Mock orders should never exist in production (createOrder refuses to
+      // mint them there), but never trust one as paid if it somehow shows up.
+      console.error(`[verifyPayment] Rejected mock order verification in production: ${orderId}`);
+      conn.release();
+      return res.status(400).json({ success: false, message: 'Payment verification failed: Invalid order' });
+    }
 
     if (isMock) {
       isPaid = true;
@@ -293,33 +313,57 @@ const getPaymentHistory = async (req, res) => {
 };
 
 // POST /api/payment/webhook
+// Cashfree PG webhook (API version 2023-08-01): signed with
+// base64(HMAC-SHA256(timestamp + rawBody, CASHFREE_SECRET_KEY)) in the
+// `x-webhook-signature` header, alongside `x-webhook-timestamp`.
+// Docs: https://www.cashfree.com/docs/api-reference/payments/latest/webhooks
 const handleWebhook = async (req, res) => {
   try {
-    const signature = req.headers['x-razorpay-signature'];
-    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || 'ppokket_webhook_secret_123';
+    const signature = req.headers['x-webhook-signature'];
+    const timestamp = req.headers['x-webhook-timestamp'];
+    const webhookSecret = process.env.CASHFREE_SECRET_KEY;
 
-    // Validate signature using raw body (Razorpay signs the raw request body)
-    const shasum = crypto.createHmac('sha256', webhookSecret);
-    shasum.update(req.rawBody || JSON.stringify(req.body));
-    const digest = shasum.digest('hex');
+    if (!webhookSecret) {
+      console.error('[handleWebhook] CASHFREE_SECRET_KEY not configured — rejecting webhook.');
+      return res.status(500).json({ success: false, message: 'Webhook not configured' });
+    }
+    if (!signature || !timestamp) {
+      return res.status(400).json({ success: false, message: 'Missing webhook signature headers' });
+    }
 
-    if (digest !== signature) {
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(timestamp + (req.rawBody || JSON.stringify(req.body)))
+      .digest('base64');
+
+    const sigBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expectedSignature);
+    const signatureValid = sigBuf.length === expectedBuf.length && crypto.timingSafeEqual(sigBuf, expectedBuf);
+
+    if (!signatureValid) {
+      console.error('[handleWebhook] Invalid Cashfree webhook signature');
       return res.status(400).json({ success: false, message: 'Invalid webhook signature' });
     }
 
-    // Acknowledge receipt immediately to Razorpay
+    // Acknowledge receipt immediately to Cashfree
     res.json({ status: 'ok' });
 
-    const event = req.body.event;
+    const eventType = req.body.type;
 
-    if (event === 'order.paid') {
-      const paymentEntity = req.body.payload?.payment?.entity;
-      if (!paymentEntity) return;
+    if (eventType === 'PAYMENT_SUCCESS_WEBHOOK') {
+      const order = req.body.data?.order;
+      const payment = req.body.data?.payment;
+      if (!order || !payment || payment.payment_status !== 'SUCCESS') return;
 
-      const razorpay_order_id = paymentEntity.order_id;
-      const razorpay_payment_id = paymentEntity.id;
+      const razorpay_order_id = order.order_id; // column name kept for schema compat; holds the Cashfree order_id
+      const razorpay_payment_id = String(payment.cf_payment_id);
       const razorpay_signature = signature;
-      const amount = paymentEntity.amount / 100; // paise to rupees
+      const amount = parseFloat(payment.payment_amount ?? order.order_amount);
+
+      if (razorpay_order_id.startsWith('order_mock') && process.env.NODE_ENV === 'production') {
+        console.error(`[handleWebhook] Rejected mock order in production webhook: ${razorpay_order_id}`);
+        return;
+      }
 
       const conn = await pool.getConnection();
       try {

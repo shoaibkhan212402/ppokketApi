@@ -203,6 +203,9 @@ const processAutoDebits = async () => {
     const secretKey = process.env.CASHFREE_SECRET_KEY;
     const cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
     const isMockGlobal = !appId || appId.includes('placeholder') || !secretKey || secretKey.includes('placeholder');
+    if (isMockGlobal && process.env.NODE_ENV === 'production') {
+      console.error('⚠️  [cron][AutoDebit] CASHFREE_APP_ID/CASHFREE_SECRET_KEY missing or placeholder in PRODUCTION — auto-debits are running in MOCK mode (EMIs will be marked paid with no real charge). Fix env vars immediately.');
+    }
     const baseUrl = cfEnv === 'production' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com';
 
     const { sendNotification } = require('./fcm');

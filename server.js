@@ -24,6 +24,18 @@ const aadhaarRoutes      = require('./routes/aadhaarRoutes');
 const referralRoutes     = require('./routes/referralRoutes');
 const dsaRoutes          = require('./routes/dsaRoutes');
 
+// Process-level crash visibility. There's no external error-tracking
+// service (Sentry/etc.) wired in yet — this is the minimum safety net so a
+// bug in a cron job or a stray unhandled promise doesn't die silently.
+// TODO: pipe these into a real monitoring service once one is provisioned.
+process.on('uncaughtException', (err) => {
+  console.error('💥 UNCAUGHT EXCEPTION — shutting down:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 UNHANDLED PROMISE REJECTION:', reason);
+});
+
 const app = express();
 
 // Trust reverse-proxy (Render, etc.) so rate-limiters see real client IPs

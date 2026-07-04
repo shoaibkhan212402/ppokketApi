@@ -4,9 +4,16 @@ const { pool } = require('../config/db');
 const { redisClient } = require('../config/redis');
 
 // OTP config
-const OTP_TTL_SECONDS   = 5 * 60;  // 5 minutes
-const OTP_MAX_ATTEMPTS  = 5;        // wrong attempts before lockout
-const OTP_LOCK_SECONDS  = 15 * 60; // lockout duration
+const OTP_TTL_SECONDS    = 5 * 60;  // 5 minutes
+const OTP_MAX_ATTEMPTS   = 5;        // wrong attempts before lockout
+const OTP_LOCK_SECONDS   = 15 * 60; // lockout duration
+const OTP_RESEND_COOLDOWN_SECONDS = 60;       // min gap between two sends to the same number
+const OTP_MAX_SENDS_PER_WINDOW    = 5;        // cap sends per number even across the cooldown
+const OTP_SEND_WINDOW_SECONDS     = 60 * 60;  // 1 hour
+
+// Admin login brute-force lockout (mirrors the OTP lockout pattern)
+const ADMIN_MAX_ATTEMPTS = 5;
+const ADMIN_LOCK_SECONDS = 15 * 60;
 
 // Generate JWT
 const generateToken = (id, role = 'user') => {
@@ -55,6 +62,24 @@ const sendOTP = async (req, res) => {
       return res.status(429).json({ success: false, message: `Too many attempts. Try again in ${Math.ceil(ttl / 60)} minutes.` });
     }
 
+    // Per-number resend cooldown — stops SMS-bombing one victim number from
+    // rotating IPs/sessions (the route-level rate limiter is per-IP only).
+    const cooldownKey = `otp_cooldown:${mobile}`;
+    const cooldownTtl = await redisClient.ttl(cooldownKey);
+    if (cooldownTtl > 0) {
+      return res.status(429).json({ success: false, message: `Please wait ${cooldownTtl}s before requesting another OTP.` });
+    }
+
+    // Per-number send cap within a rolling window, independent of cooldown
+    const sendCountKey = `otp_sendcount:${mobile}`;
+    const sendCount = await redisClient.incr(sendCountKey);
+    if (sendCount === 1) {
+      await redisClient.expire(sendCountKey, OTP_SEND_WINDOW_SECONDS);
+    }
+    if (sendCount > OTP_MAX_SENDS_PER_WINDOW) {
+      return res.status(429).json({ success: false, message: 'Too many OTP requests for this number. Please try again later.' });
+    }
+
     const otp = generateOTP();
 
     // Store OTP in Redis with TTL
@@ -62,6 +87,10 @@ const sendOTP = async (req, res) => {
 
     // Send via APItxt
     await sendOtpViaSms(mobile, otp);
+
+    // Only start the cooldown once the SMS actually went out, so a
+    // transient provider failure doesn't block the user's next retry.
+    await redisClient.setEx(cooldownKey, OTP_RESEND_COOLDOWN_SECONDS, '1');
 
     res.json({ success: true, message: 'OTP sent successfully' });
   } catch (err) {
@@ -260,13 +289,34 @@ const adminLogin = async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password required' });
 
+    // Per-account lockout on top of the route's per-IP rate limit — mirrors
+    // the OTP lockout pattern so credential stuffing from many IPs against
+    // one admin account still gets stopped.
+    const lockKey = `admin_lock:${email}`;
+    const locked  = await redisClient.get(lockKey);
+    if (locked) {
+      const ttl = await redisClient.ttl(lockKey);
+      return res.status(429).json({ success: false, message: `Too many failed attempts. Try again in ${Math.ceil(ttl / 60)} minutes.` });
+    }
+
+    const failKey = `admin_fail:${email}`;
+
     const [rows] = await pool.query('SELECT * FROM admins WHERE email = ? AND is_active = 1', [email]);
-    if (!rows.length) return res.status(401).json({ success: false, message: 'Invalid credentials' });
-
     const admin = rows[0];
-    const match = await bcrypt.compare(password, admin.password);
-    if (!match) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    const match = admin ? await bcrypt.compare(password, admin.password) : false;
 
+    if (!admin || !match) {
+      const fails = await redisClient.incr(failKey);
+      if (fails === 1) await redisClient.expire(failKey, ADMIN_LOCK_SECONDS);
+      if (fails >= ADMIN_MAX_ATTEMPTS) {
+        await redisClient.del(failKey);
+        await redisClient.setEx(lockKey, ADMIN_LOCK_SECONDS, '1');
+        return res.status(429).json({ success: false, message: `Too many failed attempts. This account is locked for ${ADMIN_LOCK_SECONDS / 60} minutes.` });
+      }
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    await redisClient.del(failKey);
     await pool.query('UPDATE admins SET last_login = NOW() WHERE id = ?', [admin.id]);
     const token = generateToken(admin.id, 'admin');
 

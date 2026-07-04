@@ -112,7 +112,7 @@ const getAllUsers = async (req, res) => {
     let query = `
       SELECT u.id, u.full_name, u.mobile, u.email, u.date_of_birth as dob, u.pan_number, u.aadhaar_number,
               u.monthly_income, u.occupation as employment_type, u.credit_score, u.experian_score, u.experian_fetched_at, u.credit_limit, u.wallet_balance,
-              u.interest_rate, u.is_active, u.is_kyc_verified, u.is_dsa_partner, u.created_at,
+              u.interest_rate, u.withdrawal_limit, u.is_active, u.is_kyc_verified, u.is_dsa_partner, u.created_at,
               u.custom_processing_fee_pct, u.custom_first_emi_pct,
               u.kyc_approved_tenure, u.kyc_first_emi_amount, u.kyc_regular_emi_amount,
               u.assigned_partner_id, a.name as assigned_partner_name, a.role as assigned_partner_role,
@@ -218,12 +218,12 @@ const getLeadKycDetails = async (req, res) => {
 // GET /api/admin/loans
 const getAllLoans = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status = '' } = req.query;
+    const { page = 1, limit = 20, status = '', user_id = '' } = req.query;
     const offset = (page - 1) * limit;
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
 
     let query = `
-      SELECT l.*, u.full_name, u.mobile, u.email, 
+      SELECT l.*, u.full_name, u.mobile, u.email,
              COALESCE(u.credit_score, u.experian_score) AS credit_score,
              u.occupation, u.monthly_income,
              (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
@@ -237,6 +237,10 @@ const getAllLoans = async (req, res) => {
     if (status) {
       conditions.push('l.status = ?');
       params.push(status);
+    }
+    if (user_id) {
+      conditions.push('l.user_id = ?');
+      params.push(user_id);
     }
     if (isPartner) {
       conditions.push('u.assigned_partner_id = ?');

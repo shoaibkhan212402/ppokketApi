@@ -8,7 +8,12 @@ const { sendLoanAgreementEmail } = require('../utils/email');
 const applyLoan = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { amount, duration_months, purpose } = req.body;
+    const { duration_months, purpose } = req.body;
+    const amount = Number(req.body.amount);
+
+    if (!Number.isFinite(amount) || amount < 1000) {
+      return res.status(400).json({ success: false, message: 'Invalid loan amount. Minimum withdrawal is ₹1,000.' });
+    }
 
     // Check KYC
     const [kyc] = await pool.query('SELECT status FROM kyc_documents WHERE user_id = ?', [userId]);
