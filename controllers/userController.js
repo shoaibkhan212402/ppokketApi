@@ -510,99 +510,6 @@ const getDashboard = async (req, res) => {
   }
 };
 
-// POST /api/user/check-eligibility
-const checkEligibility = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const [rows] = await pool.query('SELECT pan_number, monthly_income, occupation FROM users WHERE id = ?', [userId]);
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-    
-    const { pan_number, monthly_income, occupation } = rows[0];
-    
-    if (!pan_number || !monthly_income || !occupation) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please complete your profile details (PAN Number, Occupation, and Monthly Income) to check eligibility.'
-      });
-    }
-    
-    // PAN validation check
-    const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-    if (!panRegex.test(pan_number.toUpperCase())) {
-      return res.status(400).json({ success: false, message: 'Invalid PAN card number format in profile.' });
-    }
-    
-    // Calculate score & limit deterministically
-    let hash = 0;
-    const panClean = pan_number.toUpperCase();
-    for (let i = 0; i < panClean.length; i++) {
-      hash = (hash << 5) - hash + panClean.charCodeAt(i);
-      hash |= 0;
-    }
-    
-    const baseScore = 650 + Math.abs(hash % 151); // 650 to 800
-    let score = baseScore;
-    let limit = 10000; // default
-    
-    const income = parseFloat(monthly_income) || 0;
-    
-    if (occupation.toLowerCase() === 'student') {
-      limit = 5000;
-      score = score > 710 ? 710 : score;
-    } else if (occupation.toLowerCase() === 'salaried') {
-      if (income >= 50000) {
-        limit = 45000;
-        score = Math.min(850, score + 40);
-      } else if (income >= 30000) {
-        limit = 30000;
-        score = Math.min(850, score + 20);
-      } else if (income >= 15000) {
-        limit = 15000;
-      } else {
-        limit = 5000;
-        score = Math.max(300, score - 30);
-      }
-    } else { // self_employed / other
-      if (income >= 50000) {
-        limit = 35000;
-        score = Math.min(850, score + 20);
-      } else if (income >= 30000) {
-        limit = 25000;
-      } else if (income >= 15000) {
-        limit = 12000;
-      } else {
-        limit = 5000;
-        score = Math.max(300, score - 20);
-      }
-    }
-    
-    // Update credit score only — credit limit is assigned by admin on KYC approval
-    await pool.query(
-      'UPDATE users SET credit_score = ?, updated_at = NOW() WHERE id = ?',
-      [score, userId]
-    );
-
-    await pool.query(
-      'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [userId, 'Credit Score Updated 📊', `Your estimated credit score is ${score}. Your credit limit will be assigned by our team after KYC review.`, 'system']
-    );
-
-    await invalidateUserCache(userId);
-
-    res.json({
-      success: true,
-      message: 'Credit score calculated successfully. Your credit limit will be assigned by our team after KYC verification.',
-      credit_score: score,
-      suggested_limit: limit,
-    });
-  } catch (err) {
-    console.error('[checkEligibility]', err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
 // GET /api/user/notifications
 const getNotifications = async (req, res) => {
   try {
@@ -633,5 +540,5 @@ const markNotificationsRead = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, checkEligibility, getNotifications, markNotificationsRead, getUserCreditDetails };
+module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead, getUserCreditDetails };
 

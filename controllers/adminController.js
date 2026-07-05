@@ -861,7 +861,7 @@ const disburseLoan = async (req, res) => {
       const feeGst = Math.round(procFee * (gstPct / 100) * 100) / 100;
       const totalDeduction = procFee + feeGst;
       payoutAmount = Math.max(0, payoutAmount - totalDeduction);
-      feeDeductionMsg = ` (Deducted processing fee: ₹${procFee} + GST: ₹${feeGst})`;
+      feeDeductionMsg = ` (₹${totalDeduction} processing fee + ${gstPct}% GST deducted)`;
     }
 
     const mockUTR = 'PAYOUT' + crypto.randomBytes(6).toString('hex').toUpperCase();

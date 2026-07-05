@@ -25,6 +25,13 @@ const generateToken = (id, role = 'user') => {
 // Generate a cryptographically random 6-digit OTP
 const generateOTP = () => String(Math.floor(100000 + Math.random() * 900000));
 
+// Dev-only fixed OTP for local testing so we don't burn real SMS credits / need
+// the SMS gateway configured locally. Locked to NODE_ENV !== 'production' AND a
+// single hardcoded test number — never a general "any number + this code" backdoor.
+const DEV_TEST_MOBILE = '7310249234';
+const DEV_TEST_OTP    = '123456';
+const isDevTestNumber = (mobile) => process.env.NODE_ENV !== 'production' && mobile === DEV_TEST_MOBILE;
+
 // Send OTP via APItxt (SMS by default, can extend to whatsapp/voice)
 const sendOtpViaSms = async (mobile, otp) => {
   const authkey = process.env.APITXT_AUTHKEY;
@@ -80,13 +87,16 @@ const sendOTP = async (req, res) => {
       return res.status(429).json({ success: false, message: 'Too many OTP requests for this number. Please try again later.' });
     }
 
-    const otp = generateOTP();
+    const otp = isDevTestNumber(mobile) ? DEV_TEST_OTP : generateOTP();
 
     // Store OTP in Redis with TTL
     await redisClient.setEx(`otp:${mobile}`, OTP_TTL_SECONDS, JSON.stringify({ otp, attempts: 0 }));
 
-    // Send via APItxt
-    await sendOtpViaSms(mobile, otp);
+    // Skip the real SMS gateway for the dev test number — no gateway credentials
+    // needed locally, and no real SMS/credits spent testing.
+    if (!isDevTestNumber(mobile)) {
+      await sendOtpViaSms(mobile, otp);
+    }
 
     // Only start the cooldown once the SMS actually went out, so a
     // transient provider failure doesn't block the user's next retry.
