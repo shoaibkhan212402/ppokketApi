@@ -3,6 +3,7 @@ const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
 const { sendNotification } = require('../utils/fcm');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { sendLoanAgreementEmail } = require('../utils/email');
+const { getUserCreditDetails } = require('./userController');
 
 // POST /api/loan/apply
 const applyLoan = async (req, res) => {
@@ -46,15 +47,19 @@ const applyLoan = async (req, res) => {
     const creditLimit = Number(user.credit_limit) || 0;
     // effective cap = min(credit_limit, withdrawal_limit) — withdrawal_limit NULL means no extra cap
     const withdrawalLimit = user.withdrawal_limit !== null ? Number(user.withdrawal_limit) : creditLimit;
-    const effectiveLimit  = Math.min(creditLimit, withdrawalLimit);
 
     if (creditLimit <= 0) {
       return res.status(400).json({ success: false, message: 'Your credit limit has not been assigned yet. Please wait for admin review.' });
     }
-    if (amount > effectiveLimit) {
+
+    // Check remaining withdrawal limit (withdrawal limit minus what's already been disbursed/occupied),
+    // not just the raw withdrawal limit — otherwise a user who already withdrew part of their limit
+    // could withdraw the full limit again on a fresh loan application.
+    const { occupiedCredit, availableCredit } = await getUserCreditDetails(userId, creditLimit, user.withdrawal_limit);
+    if (amount > availableCredit) {
       const msg = withdrawalLimit < creditLimit
-        ? `Loan amount exceeds your withdrawal limit of ₹${effectiveLimit} (credit limit: ₹${creditLimit})`
-        : `Loan amount exceeds your credit limit of ₹${creditLimit}`;
+        ? `Loan amount exceeds your available withdrawal limit of ₹${availableCredit} (withdrawal limit: ₹${withdrawalLimit}, already utilized: ₹${occupiedCredit})`
+        : `Loan amount exceeds your available credit limit of ₹${availableCredit} (already utilized: ₹${occupiedCredit})`;
       return res.status(400).json({ success: false, message: msg });
     }
 

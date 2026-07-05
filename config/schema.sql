@@ -248,6 +248,19 @@ CREATE TABLE IF NOT EXISTS emi_schedule (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- CONTACT US SUBMISSIONS (public contact form)
+CREATE TABLE IF NOT EXISTS contact_messages (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  name       VARCHAR(150) NOT NULL,
+  email      VARCHAR(191) NOT NULL,
+  phone      VARCHAR(20),
+  category   VARCHAR(100),
+  subject    VARCHAR(255),
+  message    TEXT NOT NULL,
+  is_read    TINYINT(1) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- DEFAULT ADMIN SEED
 INSERT IGNORE INTO admins (name, email, password, role)
 VALUES ('Super Admin', 'admin@ppokket.com', '$2b$10$yQGnMfomJsbW9fvWFhH/zO.s/I.YUx2ujz9tXTOjvgJd9laGbAZTu', 'super_admin');

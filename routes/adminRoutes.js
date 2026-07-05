@@ -38,6 +38,7 @@ const {
   adminDeleteReport: adminDeleteExperianReport
 } = require('../controllers/experianController');
 const { adminGetReferrals, adminCreditReferral } = require('../controllers/referralController');
+const { getContactMessages, toggleContactMessageRead } = require('../controllers/contactController');
 
 router.use(adminProtect); // All admin routes protected
 
@@ -92,6 +93,9 @@ router.delete('/experian/reports/:reportId', requirePermission('manage_settings'
 // Referrals
 router.get('/referrals', requirePermission('manage_referrals'), adminGetReferrals);
 router.post('/referrals/:id/credit', requirePermission('manage_referrals'), adminCreditReferral);
+
+router.get('/contact-messages', requirePermission('view_dashboard'), getContactMessages);
+router.patch('/contact-messages/:id/toggle-read', requirePermission('view_dashboard'), toggleContactMessageRead);
 
 // DSA Management
 router.get('/dsa/partners', requirePermission('manage_dsa'), getAllDsaPartners);

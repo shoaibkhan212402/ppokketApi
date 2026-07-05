@@ -633,5 +633,5 @@ const markNotificationsRead = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, checkEligibility, getNotifications, markNotificationsRead };
+module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, checkEligibility, getNotifications, markNotificationsRead, getUserCreditDetails };
 

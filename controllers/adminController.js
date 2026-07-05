@@ -7,6 +7,7 @@ const { sendNotification, sendMulticast } = require('../utils/fcm');
 const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
+const { getUserCreditDetails } = require('./userController');
 
 // GET /api/admin/dashboard
 const getAdminDashboard = async (req, res) => {
@@ -80,6 +81,8 @@ const getAdminDashboard = async (req, res) => {
       );
     }
 
+    const [[pendingContact]] = await pool.query("SELECT COUNT(*) as count FROM contact_messages WHERE is_read = 0");
+
     const response = {
       success: true,
       stats: {
@@ -90,6 +93,7 @@ const getAdminDashboard = async (req, res) => {
         total_disbursed: parseFloat(totalDisbursed.total),
         total_collected: parseFloat(totalCollected.total),
         pending_kyc: pendingKYC.count,
+        pending_contact_messages: pendingContact.count,
       },
       recent_loans: recentLoans,
     };
@@ -505,6 +509,19 @@ const setWithdrawalLimit = async (req, res) => {
 
     if (wl !== null && wl > parseFloat(userRow[0].credit_limit)) {
       return res.status(400).json({ success: false, message: 'Withdrawal limit cannot exceed credit limit' });
+    }
+
+    // Withdrawal limit can never be set below what the user has already withdrawn/disbursed —
+    // otherwise availableCredit would go negative and the user would be unable to close out
+    // their existing loan(s) without exceeding the new (lower) limit.
+    if (wl !== null) {
+      const { occupiedCredit } = await getUserCreditDetails(userId, userRow[0].credit_limit, null);
+      if (wl < occupiedCredit) {
+        return res.status(400).json({
+          success: false,
+          message: `Withdrawal limit cannot be less than ₹${occupiedCredit} already withdrawn/disbursed by the user`
+        });
+      }
     }
 
     await pool.query('UPDATE users SET withdrawal_limit = ? WHERE id = ?', [wl, userId]);
