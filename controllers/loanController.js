@@ -11,8 +11,8 @@ const applyLoan = async (req, res) => {
     const { duration_months, purpose } = req.body;
     const amount = Number(req.body.amount);
 
-    if (!Number.isFinite(amount) || amount < 1000) {
-      return res.status(400).json({ success: false, message: 'Invalid loan amount. Minimum withdrawal is ₹1,000.' });
+    if (!Number.isFinite(amount) || amount < 500) {
+      return res.status(400).json({ success: false, message: 'Invalid loan amount. Minimum withdrawal is ₹500.' });
     }
 
     // Check KYC
