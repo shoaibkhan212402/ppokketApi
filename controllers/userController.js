@@ -273,9 +273,6 @@ const verifyBankDetails = async (req, res) => {
     if (!ifsc_code?.trim()) {
       return res.status(400).json({ success: false, field: 'ifsc', message: 'IFSC code is required.' });
     }
-    if (!bank_name?.trim()) {
-      return res.status(400).json({ success: false, field: 'bankName', message: 'Bank name is required.' });
-    }
 
     // ── Step 1: Format validation ────────────────────────────────────────────
     const cleanAcc  = account_number.trim().replace(/[\s-]/g, '');
@@ -400,7 +397,7 @@ const verifyBankDetails = async (req, res) => {
         finalHolderName,
         cleanAcc,
         cleanIfsc,
-        ifscData.bank || bank_name.trim(),   // prefer API-confirmed bank name
+        ifscData.bank || (bank_name && bank_name.trim()) || 'Unknown Bank',   // prefer API-confirmed bank name
         account_type || 'savings',
         ifscData.bank    || null,
         ifscData.branch  || null,

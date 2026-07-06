@@ -9,7 +9,7 @@ const rateLimit = require('express-rate-limit');
 // was loose enough to be no real limit at all.
 const otpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 8,
+  max: process.env.NODE_ENV === 'production' ? 8 : 99999,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many OTP requests. Please try after 10 minutes.' },
@@ -21,7 +21,7 @@ const otpLimiter = rateLimit({
 // single source from hammering the endpoint across many numbers.
 const verifyLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 15,
+  max: process.env.NODE_ENV === 'production' ? 15 : 99999,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many attempts. Please try after 10 minutes.' },
