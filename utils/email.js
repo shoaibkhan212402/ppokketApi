@@ -1141,4 +1141,53 @@ const sendWelcomeEmail = async ({ user }) => {
   }
 };
 
-module.exports = { sendLoanAgreementEmail, sendWelcomeEmail };
+/**
+ * Sends an acknowledgement email to a user who submitted the public contact form.
+ */
+const sendContactAcknowledgementEmail = async ({ name, email }) => {
+  try {
+    const transporter = await getTransporter();
+    if (!transporter) {
+      console.log('⚠️ No transporter. Skipping contact acknowledgement email.');
+      return;
+    }
+
+    const from = `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`;
+
+    const info = await transporter.sendMail({
+      from,
+      replyTo: 'support@ppokket.com',
+      to: email,
+      subject: 'We have received your request — Ppokket',
+      text: `Dear ${name || 'Customer'},\n\nThank you for reaching out to Ppokket. We have received your request and our team is connecting soon.\n\nFor urgent queries, reach us at support@ppokket.com or WhatsApp us at +91 8076 813 446.\n\nPpokket Financial Services Private Limited`,
+      html: `
+        <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
+          <div style="text-align: center; margin-bottom: 28px;">
+            <h2 style="color: #1e3a8a; margin: 0; font-size: 22px; font-weight: bold;">PPOKKET FINANCIAL SERVICES PRIVATE LIMITED</h2>
+            <p style="font-size: 12px; color: #64748b; margin: 4px 0 0 0;">Partnered with RBI-registered NBFCs</p>
+          </div>
+
+          <p style="font-size: 15px;">Dear <strong>${name || 'Customer'}</strong>,</p>
+
+          <p style="font-size: 14px; color: #334155;">
+            Thank you for reaching out to <strong>Ppokket</strong>. We have received your request and our team is connecting soon.
+          </p>
+
+          <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 25px 0;" />
+          <p style="font-size: 12px; color: #94a3b8;">
+            For urgent queries, reach us at <a href="mailto:support@ppokket.com" style="color: #2563eb;">support@ppokket.com</a> or WhatsApp us at +91 8076 813 446.<br/>
+            This is an automated email — please do not reply directly.
+          </p>
+        </div>
+      `,
+    });
+
+    console.log(`✉️ Contact acknowledgement email sent to ${email}. MessageId: ${info.messageId}`);
+    const previewUrl = nodemailer.getTestMessageUrl(info);
+    if (previewUrl) console.log(`🔗 Ethereal preview: ${previewUrl}`);
+  } catch (err) {
+    console.error('❌ Failed to send contact acknowledgement email:', err.message);
+  }
+};
+
+module.exports = { sendLoanAgreementEmail, sendWelcomeEmail, sendContactAcknowledgementEmail };

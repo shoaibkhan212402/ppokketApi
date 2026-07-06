@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { sendContactAcknowledgementEmail } = require('../utils/email');
 
 // POST /api/contact  (public)
 const submitContactMessage = async (req, res) => {
@@ -14,6 +15,8 @@ const submitContactMessage = async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?)`,
       [name, email, phone || null, category || null, subject || null, message]
     );
+
+    sendContactAcknowledgementEmail({ name, email }).catch(() => {});
 
     res.json({ success: true, message: 'Your message has been sent. Our team will get back to you shortly.' });
   } catch (err) {

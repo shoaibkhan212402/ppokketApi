@@ -55,14 +55,17 @@ const createMandate = async (req, res) => {
     const config = getCashfreeConfig();
 
     // If a pending mandate already has a valid auth link, reuse it instead of
-    // creating a duplicate Cashfree subscription on every retry click.
-    if (existing.length && existing[0].status === 'pending' && existing[0].auth_link) {
-      const isMockMandate = config.isMock || existing[0].payment_mode === 'mock';
+    // creating a duplicate Cashfree subscription on every retry click — but only
+    // when it matches the current mock/live mode, otherwise fall through and
+    // regenerate it (e.g. a stale live-mode mandate left over from before keys
+    // were switched to mock, or vice versa).
+    if (existing.length && existing[0].status === 'pending' && existing[0].auth_link
+        && (existing[0].payment_mode === 'mock') === config.isMock) {
       return res.json({
         success: true,
         auth_link: existing[0].auth_link,
         subscription_id: existing[0].subscription_id,
-        is_mock: isMockMandate,
+        is_mock: existing[0].payment_mode === 'mock',
         reusing: true
       });
     }
