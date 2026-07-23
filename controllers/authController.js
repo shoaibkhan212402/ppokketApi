@@ -26,30 +26,38 @@ const generateToken = (id, role = 'user') => {
 const generateOTP = () => String(Math.floor(100000 + Math.random() * 900000));
 
 // Dev-only fixed OTP for local testing so we don't burn real SMS credits / need
-// the SMS gateway configured locally. Locked to NODE_ENV !== 'production' AND a
-// single hardcoded test number — never a general "any number + this code" backdoor.
-const DEV_TEST_MOBILE = '7310249234';
-const DEV_TEST_OTP    = '123456';
-const isDevTestNumber = (mobile) => process.env.NODE_ENV !== 'production' && mobile === DEV_TEST_MOBILE;
+// the SMS gateway configured locally.
+const DEV_TEST_MOBILE = process.env.DEV_TEST_MOBILE || '';
+const DEV_TEST_OTP    = process.env.DEV_TEST_OTP || '';
+const isDevTestNumber = (mobile) => process.env.NODE_ENV !== 'production' && DEV_TEST_MOBILE && mobile === DEV_TEST_MOBILE;
 
-// Send OTP via APItxt (SMS by default, can extend to whatsapp/voice)
+// Send OTP via Orbitel Bulk SMS API
 const sendOtpViaSms = async (mobile, otp) => {
-  const authkey = process.env.APITXT_AUTHKEY;
-  if (!authkey) throw new Error('OTP service not configured');
+  const user = process.env.ORBITEL_USER;
+  const authkey = process.env.ORBITEL_AUTHKEY;
+  const sender = process.env.ORBITEL_SENDER;
+  const templateid = process.env.ORBITEL_TEMPLATE_ID;
 
-  const url = new URL('https://apitxt.com/api/sendOTP');
+  if (!user || !authkey || !sender || !templateid) {
+    throw new Error('Orbitel SMS gateway not properly configured in environment variables');
+  }
+
+  const text = `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
+
+  const url = new URL('https://bulksms.orbitel.in/api/pushsms');
+  url.searchParams.set('user', user);
   url.searchParams.set('authkey', authkey);
-  url.searchParams.set('mobile',  `91${mobile}`);
-  url.searchParams.set('otp',     otp);
-  url.searchParams.set('channel', 'sms');
+  url.searchParams.set('type', '0');
+  url.searchParams.set('sender', sender);
+  url.searchParams.set('mobile', mobile);
+  url.searchParams.set('text', text);
+  url.searchParams.set('templateid', templateid);
+  url.searchParams.set('rpt', '1');
 
   const resp = await fetch(url.toString());
-  const data = await resp.json();
+  const data = await resp.text();
 
-  if (data.status !== 'success') {
-    console.error('[APItxt]', data);
-    throw new Error(data.message || 'Failed to send OTP');
-  }
+  console.log('[Orbitel SMS Response]:', data);
   return data;
 };
 
