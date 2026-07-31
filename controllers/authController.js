@@ -25,11 +25,10 @@ const generateToken = (id, role = 'user') => {
 // Generate a cryptographically random 6-digit OTP
 const generateOTP = () => String(Math.floor(100000 + Math.random() * 900000));
 
-// Dev-only fixed OTP for local testing so we don't burn real SMS credits / need
-// the SMS gateway configured locally.
-const DEV_TEST_MOBILE = process.env.DEV_TEST_MOBILE || '';
-const DEV_TEST_OTP    = process.env.DEV_TEST_OTP || '';
-const isDevTestNumber = (mobile) => process.env.NODE_ENV !== 'production' && DEV_TEST_MOBILE && mobile === DEV_TEST_MOBILE;
+// Dev & Play Store Reviewer test credentials
+const DEV_TEST_MOBILE = process.env.DEV_TEST_MOBILE || '9999999999';
+const DEV_TEST_OTP    = process.env.DEV_TEST_OTP || '123456';
+const isDevTestNumber = (mobile) => mobile === DEV_TEST_MOBILE || (DEV_TEST_MOBILE && mobile === DEV_TEST_MOBILE);
 
 // Send OTP via Orbitel Bulk SMS API
 const sendOtpViaSms = async (mobile, otp) => {
@@ -134,16 +133,19 @@ const handleVerifyAndLogin = async (mobile, otp, res, referralCode = null) => {
     return res.status(429).json({ success: false, message: `Too many failed attempts. Try again in ${Math.ceil(ttl / 60)} minutes.` });
   }
 
+  // Check if test credentials (e.g. for Google Play Review)
+  const isTestBypass = isDevTestNumber(mobile) && otp === DEV_TEST_OTP;
+
   // Fetch stored OTP record
   const otpKey    = `otp:${mobile}`;
   const otpRaw    = await redisClient.get(otpKey);
-  if (!otpRaw) {
+  if (!otpRaw && !isTestBypass) {
     return res.status(400).json({ success: false, message: 'OTP expired or not requested. Please request a new OTP.' });
   }
 
-  const record = JSON.parse(otpRaw);
+  const record = otpRaw ? JSON.parse(otpRaw) : { otp: DEV_TEST_OTP, attempts: 0 };
 
-  if (record.otp !== otp) {
+  if (record.otp !== otp && !isTestBypass) {
     // Increment failed attempts
     record.attempts += 1;
     if (record.attempts >= OTP_MAX_ATTEMPTS) {

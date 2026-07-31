@@ -78,7 +78,7 @@ const drawHeader = (doc, titleText) => {
 const drawFooter = (doc) => {
   doc.strokeColor('#cbd5e1').lineWidth(0.5).moveTo(50, doc.page.height - 65).lineTo(562, doc.page.height - 65).stroke();
   doc.fontSize(6.5).fillColor('#64748b').text('CIN: U66190DL2026PTC467837 | GSTIN: 07AAMCP1234A1Z1 | Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', 50, doc.page.height - 58, { align: 'center' });
-  doc.text('Phone: 033 6645 2400 | Email: support@ppokket.com | Website: www.ppokket.com', { align: 'center' });
+  doc.text('Phone: +91 81780 31447 | Email: support@ppokket.com | Website: www.ppokket.com', { align: 'center' });
 };
 
 // Late Payment matrix rows data
@@ -501,7 +501,7 @@ I hereby further confirm that I understand English Language and agree that all t
     const part2Data = [
       ['1', 'Clause of Loan agreement relating to engagement of recovery agents', 'Clause 4.4(d) of the loan agreement'],
       ['2', 'Clause of Loan agreement which details grievance redressal mechanism', 'Clause 10.13 of the loan agreement'],
-      ['3', 'Phone number and email id of the nodal grievance redressal officer', 'Email: support@ppokket.com | Contact: 033 6645 2400'],
+      ['3', 'Phone number and email id of the nodal grievance redressal officer', 'Email: support@ppokket.com | Contact: +91 81780 31447'],
       ['4', 'Whether the loan is, or in future maybe, subject to transfer to other REs or securitisation (Yes/ No)', 'yes'],
       ['5', 'In case of lending under collaborative lending arrangements (co-lending/outsourcing):', 'N/A'],
       ['6', 'In case of digital loans, following specific disclosures may be furnished:', ''],
@@ -964,7 +964,7 @@ I hereby further confirm that I understand English Language and agree that all t
       replyTo: 'support@ppokket.com',
       to: emailRecipient,
       subject: `Your Loan Documents are Ready — Ppokket (Ref: ${loan.id})`,
-      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | 033 6645 2400\n\nPpokket Private Limited`,
+      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | +91 81780 31447\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 25px;">
@@ -1091,7 +1091,7 @@ const sendWelcomeEmail = async ({ user }) => {
       replyTo: 'support@ppokket.com',
       to: user.email,
       subject: 'Welcome to Ppokket — Your Account is Ready',
-      text: `Dear ${name},\n\nWelcome to Ppokket! Your account has been successfully registered.\n\nNext Steps:\n1. Complete Your KYC — Upload PAN, Aadhaar, and bank details to unlock your credit limit.\n2. Check Your Credit Score — Get your free Experian credit score instantly after KYC.\n3. Apply for a Loan — Once your credit limit is assigned, withdraw funds in minutes.\n\nYour login: +91 ${user.mobile} (OTP-based, no password needed)\nReferral Code: ${user.referral_code || '—'}\n\nFor support: support@ppokket.com | WhatsApp: +91 8076 813 446\n\nPpokket Private Limited`,
+      text: `Dear ${name},\n\nWelcome to Ppokket! Your account has been successfully registered.\n\nNext Steps:\n1. Complete Your KYC — Upload PAN, Aadhaar, and bank details to unlock your credit limit.\n2. Check Your Credit Score — Get your free Experian credit score instantly after KYC.\n3. Apply for a Loan — Once your credit limit is assigned, withdraw funds in minutes.\n\nYour login: +91 ${user.mobile} (OTP-based, no password needed)\nReferral Code: ${user.referral_code || '—'}\n\nFor support: support@ppokket.com | WhatsApp: +91 81780 31447\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 28px;">
@@ -1126,7 +1126,7 @@ const sendWelcomeEmail = async ({ user }) => {
 
           <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 25px 0;" />
           <p style="font-size: 12px; color: #94a3b8;">
-            For any queries, reach us at <a href="mailto:support@ppokket.com" style="color: #2563eb;">support@ppokket.com</a> or WhatsApp us at +91 8076 813 446.<br/>
+            For any queries, reach us at <a href="mailto:support@ppokket.com" style="color: #2563eb;">support@ppokket.com</a> or WhatsApp us at +91 81780 31447.<br/>
             This is an automated email — please do not reply directly.
           </p>
         </div>
@@ -1159,7 +1159,7 @@ const sendContactAcknowledgementEmail = async ({ name, email }) => {
       replyTo: 'support@ppokket.com',
       to: email,
       subject: 'We have received your request — Ppokket',
-      text: `Dear ${name || 'Customer'},\n\nThank you for reaching out to Ppokket. We have received your request and our team is connecting soon.\n\nFor urgent queries, reach us at support@ppokket.com or WhatsApp us at +91 8076 813 446.\n\nPpokket Private Limited`,
+      text: `Dear ${name || 'Customer'},\n\nThank you for reaching out to Ppokket. We have received your request and our team is connecting soon.\n\nFor urgent queries, reach us at support@ppokket.com or WhatsApp us at +91 81780 31447.\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 28px;">
@@ -1175,7 +1175,7 @@ const sendContactAcknowledgementEmail = async ({ name, email }) => {
 
           <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 25px 0;" />
           <p style="font-size: 12px; color: #94a3b8;">
-            For urgent queries, reach us at <a href="mailto:support@ppokket.com" style="color: #2563eb;">support@ppokket.com</a> or WhatsApp us at +91 8076 813 446.<br/>
+            For urgent queries, reach us at <a href="mailto:support@ppokket.com" style="color: #2563eb;">support@ppokket.com</a> or WhatsApp us at +91 81780 31447.<br/>
             This is an automated email — please do not reply directly.
           </p>
         </div>
