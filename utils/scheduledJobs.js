@@ -340,10 +340,85 @@ const processAutoDebits = async () => {
   }
 };
 
+// ── JOB 5: Mature fixed-return investments and credit payout (runs at 00:15 every day) ──
+//   Finds all active investments whose maturity_date has arrived, credits the
+//   locked-in maturity_amount to wallet_balance, and records the payout as a
+//   transaction. Processed per-row (own connection + row lock) rather than as
+//   one big batch transaction, since this is real money being credited and
+//   must stay safe to re-run manually without double-crediting a row.
+const matureInvestments = async () => {
+  try {
+    console.log('[cron] Running investment maturity job...');
+    const { sendNotification } = require('./fcm');
+
+    const [dueInvestments] = await pool.query(
+      `SELECT id FROM investments WHERE status = 'active' AND maturity_date <= CURDATE()`
+    );
+
+    let maturedCount = 0;
+    for (const { id } of dueInvestments) {
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+
+        const [[investment]] = await conn.query(
+          "SELECT * FROM investments WHERE id = ? AND status = 'active' FOR UPDATE",
+          [id]
+        );
+        if (!investment) { await conn.rollback(); conn.release(); continue; }
+
+        const [updateResult] = await conn.query(
+          "UPDATE investments SET status = 'matured', matured_at = NOW() WHERE id = ? AND status = 'active'",
+          [id]
+        );
+        if (updateResult.affectedRows !== 1) { await conn.rollback(); conn.release(); continue; }
+
+        const payoutAmount = parseFloat(investment.maturity_amount);
+
+        await conn.query('UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?', [payoutAmount, investment.user_id]);
+
+        const [txnResult] = await conn.query(
+          `INSERT INTO transactions (user_id, investment_id, amount, type, status, description)
+           VALUES (?, ?, ?, 'investment_payout', 'success', ?)`,
+          [investment.user_id, investment.id, payoutAmount, `Maturity payout for investment #${investment.id}`]
+        );
+
+        await conn.query('UPDATE investments SET payout_transaction_id = ? WHERE id = ?', [txnResult.insertId, investment.id]);
+
+        const msg = `Your investment of ${formatINR(investment.principal_amount)} has matured. ${formatINR(payoutAmount)} has been credited to your wallet.`;
+        await conn.query(
+          'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+          [investment.user_id, '💰 Investment Matured', msg, 'payment']
+        );
+
+        await conn.commit();
+        maturedCount++;
+
+        const [[user]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [investment.user_id]);
+        if (user?.fcm_token) {
+          sendNotification(user.fcm_token, '💰 Investment Matured', msg, { screen: 'Investments' }).catch(() => {});
+        }
+      } catch (err) {
+        try { await conn.rollback(); } catch (_) {}
+        console.error(`[cron][investment-maturity] Failed for investment #${id}:`, err.message);
+      } finally {
+        conn.release();
+      }
+    }
+
+    console.log(`[cron] Investment maturity job complete — ${maturedCount} investment(s) matured`);
+  } catch (err) {
+    console.error('[cron][investment-maturity]', err.message);
+  }
+};
+
 // ── Register all cron jobs ────────────────────────────────────────────────────
 const registerJobs = () => {
   // Penalty calculation — every day at 00:05
   cron.schedule('5 0 * * *', markOverdueAndCalcPenalty, { timezone: 'Asia/Kolkata' });
+
+  // Investment maturity — every day at 00:15
+  cron.schedule('15 0 * * *', matureInvestments, { timezone: 'Asia/Kolkata' });
 
   // EMI reminders — every day at 09:00
   cron.schedule('0 9 * * *', sendEmiReminders, { timezone: 'Asia/Kolkata' });
@@ -354,7 +429,7 @@ const registerJobs = () => {
   // Auto-debit processing — every day at 09:30
   cron.schedule('30 9 * * *', processAutoDebits, { timezone: 'Asia/Kolkata' });
 
-  console.log('✅ Scheduled jobs registered: penalty, EMI reminders, audit cleanup, auto-debit');
+  console.log('✅ Scheduled jobs registered: penalty, investment maturity, EMI reminders, audit cleanup, auto-debit');
 };
 
-module.exports = { registerJobs, markOverdueAndCalcPenalty, sendEmiReminders, processAutoDebits };
+module.exports = { registerJobs, markOverdueAndCalcPenalty, sendEmiReminders, processAutoDebits, matureInvestments };

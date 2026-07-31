@@ -7,52 +7,73 @@ const { invalidateUserCache } = require('../config/redis');
 // POST /api/payment/create-order
 const createOrder = async (req, res) => {
   try {
-    const { loan_id, amount, emi_id, is_settlement } = req.body;
+    const { loan_id, investment_id, amount, emi_id, is_settlement } = req.body;
     const userId = req.user.id;
 
-    if (!loan_id) {
-      return res.status(400).json({ success: false, message: 'loan_id required' });
-    }
-
-    // Verify loan belongs to user
-    const [loanRows] = await pool.query(
-      'SELECT * FROM loans WHERE id = ? AND user_id = ?',
-      [loan_id, userId]
-    );
-    if (!loanRows.length) {
-      return res.status(404).json({ success: false, message: 'Loan not found' });
-    }
-    const loan = loanRows[0];
-
-    if (loan.status !== 'disbursed') {
-      return res.status(400).json({ success: false, message: `Loan status is ${loan.status}. Payment requires disbursed status.` });
+    if (!loan_id && !investment_id) {
+      return res.status(400).json({ success: false, message: 'loan_id or investment_id required' });
     }
 
     let amountVal;
     let descriptionText;
-    let paymentType = 'emi';
+    let paymentType;
+    let refLoanId = null;
+    let refInvestmentId = null;
 
-    if (is_settlement) {
-      if (loan.settlement_amount === null || loan.settlement_amount === undefined) {
-        return res.status(400).json({ success: false, message: 'No active settlement offer found for this loan.' });
+    if (investment_id) {
+      const [invRows] = await pool.query(
+        'SELECT * FROM investments WHERE id = ? AND user_id = ?',
+        [investment_id, userId]
+      );
+      if (!invRows.length) {
+        return res.status(404).json({ success: false, message: 'Investment not found' });
       }
-      amountVal = parseFloat(loan.settlement_amount);
-      descriptionText = `Settlement payment for loan #${loan_id}`;
-      paymentType = 'settlement';
+      const investment = invRows[0];
+      if (investment.status !== 'pending') {
+        return res.status(400).json({ success: false, message: `Investment status is ${investment.status}. Funding requires pending status.` });
+      }
+      amountVal = parseFloat(investment.principal_amount);
+      descriptionText = `Investment funding — ${investment.tenure_months} months @ ${investment.interest_rate}%/month`;
+      paymentType = 'investment';
+      refInvestmentId = investment.id;
     } else {
-      const regularAmount = amount || emi_id;
-      if (!regularAmount) {
-        return res.status(400).json({ success: false, message: 'amount required' });
+      // Verify loan belongs to user
+      const [loanRows] = await pool.query(
+        'SELECT * FROM loans WHERE id = ? AND user_id = ?',
+        [loan_id, userId]
+      );
+      if (!loanRows.length) {
+        return res.status(404).json({ success: false, message: 'Loan not found' });
       }
-      amountVal = regularAmount;
-      descriptionText = `EMI payment for loan #${loan_id}`;
-      paymentType = 'emi';
+      const loan = loanRows[0];
+
+      if (loan.status !== 'disbursed') {
+        return res.status(400).json({ success: false, message: `Loan status is ${loan.status}. Payment requires disbursed status.` });
+      }
+
+      if (is_settlement) {
+        if (loan.settlement_amount === null || loan.settlement_amount === undefined) {
+          return res.status(400).json({ success: false, message: 'No active settlement offer found for this loan.' });
+        }
+        amountVal = parseFloat(loan.settlement_amount);
+        descriptionText = `Settlement payment for loan #${loan_id}`;
+        paymentType = 'settlement';
+      } else {
+        const regularAmount = amount || emi_id;
+        if (!regularAmount) {
+          return res.status(400).json({ success: false, message: 'amount required' });
+        }
+        amountVal = regularAmount;
+        descriptionText = `EMI payment for loan #${loan_id}`;
+        paymentType = 'emi';
+      }
+      refLoanId = loan_id;
     }
 
     const [userRow] = await pool.query('SELECT full_name, mobile, email FROM users WHERE id = ?', [userId]);
     const user = userRow[0] || {};
 
-    let orderId = `order_${loan_id}_${Date.now()}`;
+    let orderId = `order_${refLoanId ? refLoanId : 'inv' + refInvestmentId}_${Date.now()}`;
     let paymentSessionId = null;
     let cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
     let isMock = true;
@@ -77,7 +98,9 @@ const createOrder = async (req, res) => {
             customer_name: user.full_name || 'Customer'
           },
           order_meta: {
-            return_url: `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=My+Loans&order_id={order_id}`
+            return_url: refInvestmentId
+              ? `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=Investments&order_id={order_id}`
+              : `${req.headers.origin || process.env.FRONTEND_URL || 'https://ppokket.com'}/profile?tab=My+Loans&order_id={order_id}`
           }
         }, {
           headers: {
@@ -110,9 +133,9 @@ const createOrder = async (req, res) => {
 
     // Save pending transaction
     await pool.query(
-      `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, amount, type, status, description)
-       VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
-      [userId, loan_id, orderId, amountVal, paymentType, descriptionText]
+      `INSERT INTO transactions (user_id, loan_id, investment_id, razorpay_order_id, amount, type, status, description)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)`,
+      [userId, refLoanId, refInvestmentId, orderId, amountVal, paymentType, descriptionText]
     );
 
     res.json({
@@ -216,8 +239,21 @@ const verifyPayment = async (req, res) => {
 
     // Update loan amount_paid
     const paidAmount = txn[0].amount;
-    
-    if (txn[0].type === 'settlement') {
+
+    if (txn[0].investment_id) {
+      // Investment funding — activate the investment
+      await conn.query(
+        `UPDATE investments SET status = 'active', start_date = CURDATE(),
+           maturity_date = DATE_ADD(CURDATE(), INTERVAL tenure_months MONTH)
+         WHERE id = ? AND status = 'pending'`,
+        [txn[0].investment_id]
+      );
+
+      await conn.query(
+        'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+        [userId, 'Investment Active 🎉', `Your investment of ₹${paidAmount} is now active. Payment ID: ${paymentId}`, 'payment']
+      );
+    } else if (txn[0].type === 'settlement') {
       // Settle the loan: mark the loan as fully paid and status = 'closed'
       await conn.query(
         `UPDATE loans SET amount_paid = amount_paid + ?, status = 'closed' WHERE id = ?`,
@@ -277,7 +313,11 @@ const verifyPayment = async (req, res) => {
 
     const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]);
     if (user[0]?.fcm_token) {
-      sendNotification(user[0].fcm_token, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received.`, { screen: 'Loans' }).catch(() => {});
+      if (txn[0].investment_id) {
+        sendNotification(user[0].fcm_token, 'Investment Active 🎉', `Your investment of ₹${paidAmount} is now active.`, { screen: 'Investments' }).catch(() => {});
+      } else {
+        sendNotification(user[0].fcm_token, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received.`, { screen: 'Loans' }).catch(() => {});
+      }
     }
 
     res.json({
@@ -389,6 +429,7 @@ const handleWebhook = async (req, res) => {
         }
 
         const loan_id = txn[0].loan_id;
+        const investment_id = txn[0].investment_id;
         const userId = txn[0].user_id;
 
         // Update transaction
@@ -400,6 +441,26 @@ const handleWebhook = async (req, res) => {
            WHERE razorpay_order_id = ?`,
           [razorpay_payment_id, razorpay_signature, razorpay_order_id]
         );
+
+        if (investment_id) {
+          // Investment funding — activate the investment
+          await conn.query(
+            `UPDATE investments SET status = 'active', start_date = CURDATE(),
+               maturity_date = DATE_ADD(CURDATE(), INTERVAL tenure_months MONTH)
+             WHERE id = ? AND status = 'pending'`,
+            [investment_id]
+          );
+
+          await conn.query(
+            'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+            [userId, 'Investment Active (Webhook) 🎉', `Your investment of ₹${amount} is now active. Payment ID: ${razorpay_payment_id}`, 'payment']
+          );
+
+          await conn.commit();
+          conn.release();
+          await invalidateUserCache(userId).catch(() => {});
+          return;
+        }
 
         // Update loan amount_paid
         await conn.query(

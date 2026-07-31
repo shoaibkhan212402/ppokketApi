@@ -1107,6 +1107,8 @@ const updateSystemSettings = async (req, res) => {
       'first_emi_principal_pct', 'first_emi_extra_pct', 'penalty_grace_days', 'penalty_type', 'penalty_rate_per_day',
       'penalty_flat_per_day', 'penalty_max_pct_of_emi', 'gst_on_penalty', 'bounce_charge',
       'gst_on_bounce', 'min_cibil_score',
+      'investment_monthly_rate', 'investment_min_amount', 'investment_max_amount',
+      'investment_min_tenure_months', 'investment_max_tenure_months',
     ];
     const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
     for (const [k, v] of updates) {

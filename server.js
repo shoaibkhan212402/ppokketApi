@@ -24,6 +24,7 @@ const aadhaarRoutes      = require('./routes/aadhaarRoutes');
 const referralRoutes     = require('./routes/referralRoutes');
 const dsaRoutes          = require('./routes/dsaRoutes');
 const contactRoutes      = require('./routes/contactRoutes');
+const investmentRoutes   = require('./routes/investmentRoutes');
 
 // Process-level crash visibility. There's no external error-tracking
 // service (Sentry/etc.) wired in yet — this is the minimum safety net so a
@@ -111,6 +112,7 @@ app.use('/api/aadhaar',       aadhaarRoutes);
 app.use('/api/referral',      referralRoutes);
 app.use('/api/dsa',           dsaRoutes);
 app.use('/api/contact',       contactRoutes);
+app.use('/api/investment',    investmentRoutes);
 
 // 404 handler
 app.use((req, res) => res.status(404).json({ success: false, message: 'Route not found' }));

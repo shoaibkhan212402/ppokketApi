@@ -39,6 +39,7 @@ const {
 } = require('../controllers/experianController');
 const { adminGetReferrals, adminCreditReferral } = require('../controllers/referralController');
 const { getContactMessages, toggleContactMessageRead } = require('../controllers/contactController');
+const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal } = require('../controllers/investmentController');
 
 router.use(adminProtect); // All admin routes protected
 
@@ -93,6 +94,12 @@ router.delete('/experian/reports/:reportId', requirePermission('manage_settings'
 // Referrals
 router.get('/referrals', requirePermission('manage_referrals'), adminGetReferrals);
 router.post('/referrals/:id/credit', requirePermission('manage_referrals'), adminCreditReferral);
+
+// Investment management (super_admin only) — rate/min/max are plain
+// system_settings keys, edited via the existing /system-settings endpoints
+router.get('/investments', requireSuperAdmin, adminGetAllInvestments);
+router.get('/investments/:id', requireSuperAdmin, adminGetInvestmentDetail);
+router.post('/investments/:id/complete-withdrawal', requireSuperAdmin, adminCompleteWithdrawal);
 
 router.get('/contact-messages', requirePermission('view_dashboard'), getContactMessages);
 router.patch('/contact-messages/:id/toggle-read', requirePermission('view_dashboard'), toggleContactMessageRead);

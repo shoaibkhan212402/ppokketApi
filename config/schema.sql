@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   cashfree_order_id   VARCHAR(100) DEFAULT NULL,
   cashfree_payment_id VARCHAR(100) DEFAULT NULL,
   emi_no              INT DEFAULT NULL,
-  type                ENUM('credit','debit','emi','refund','cashback','settlement') NOT NULL,
+  type                ENUM('credit','debit','emi','refund','cashback','settlement','investment','investment_payout','investment_withdrawal') NOT NULL,
   status              ENUM('pending','success','failed') DEFAULT 'pending',
   description         VARCHAR(500),
   receipt_url         VARCHAR(500),
@@ -352,7 +352,59 @@ INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES
   ('processing_fee_in_first_emi','false'),
   ('step_down_emi_enabled',      'true'),
   ('penalty_rate',               '1'),
-  ('grace_period_days',          '1');
+  ('grace_period_days',          '1'),
+  ('investment_monthly_rate',       '1'),
+  ('investment_min_amount',         '5000'),
+  ('investment_max_amount',         ''),
+  ('investment_min_tenure_months',  '1'),
+  ('investment_max_tenure_months',  '12');
+
+-- INVESTMENTS TABLE (fixed-return: user picks amount + tenure (months) freely;
+-- interest_rate is a snapshot of the admin-configured investment_monthly_rate
+-- system_setting at the time of creation, applied as simple monthly interest —
+-- no separate "plans" catalog, no compounding)
+--
+-- Withdrawal is two-step, mirroring how loan disbursement already works in this
+-- codebase (adminController.js disburseLoan): the user requests a withdrawal
+-- and gives a payout destination (bank or UPI); the investment moves to
+-- 'withdrawal_requested' and the payout amount/type is locked in at that
+-- moment (pending_payout_amount / is_early_withdrawal) so admin timing can't
+-- change what the user is owed. An admin then manually sends the money
+-- outside the app and marks it complete, which is when wallet_balance is
+-- actually credited and the investment reaches its terminal status
+-- ('matured' or 'withdrawn').
+CREATE TABLE IF NOT EXISTS investments (
+  id                     INT AUTO_INCREMENT PRIMARY KEY,
+  user_id                INT NOT NULL,
+  principal_amount       DECIMAL(12,2) NOT NULL,
+  interest_rate          DECIMAL(5,2) NOT NULL,
+  tenure_months          INT NOT NULL,
+  maturity_amount        DECIMAL(12,2) NOT NULL,
+  start_date             DATE DEFAULT NULL,
+  maturity_date          DATE DEFAULT NULL,
+  status                 ENUM('pending','active','withdrawal_requested','matured','cancelled','withdrawn') DEFAULT 'pending',
+  payout_method          ENUM('bank','upi') DEFAULT NULL,
+  payout_account_holder  VARCHAR(150) DEFAULT NULL,
+  payout_account_number  VARCHAR(50)  DEFAULT NULL,
+  payout_ifsc            VARCHAR(20)  DEFAULT NULL,
+  payout_upi_id          VARCHAR(100) DEFAULT NULL,
+  pending_payout_amount  DECIMAL(12,2) DEFAULT NULL, -- locked in at withdrawal-request time
+  is_early_withdrawal    TINYINT(1) DEFAULT NULL,     -- locked in at withdrawal-request time
+  withdrawal_requested_at TIMESTAMP NULL,
+  matured_at             TIMESTAMP NULL, -- set when status becomes 'matured' or 'withdrawn' (terminal)
+  payout_transaction_id  INT DEFAULT NULL,
+  created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (payout_transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Deferred FK: transactions.investment_id → investments(id) (defined here because
+-- the investments table comes after transactions in this file — same reason
+-- users.assigned_partner_id → admins(id) is deferred above)
+ALTER TABLE transactions ADD COLUMN investment_id INT DEFAULT NULL;
+ALTER TABLE transactions ADD CONSTRAINT fk_transactions_investment
+  FOREIGN KEY (investment_id) REFERENCES investments(id) ON DELETE SET NULL;
 
 -- INDEXES
 CREATE INDEX idx_users_mobile           ON users(mobile);
@@ -364,3 +416,6 @@ CREATE INDEX idx_transactions_user_id   ON transactions(user_id);
 CREATE INDEX idx_notifications_user_id  ON notifications(user_id);
 CREATE INDEX idx_emi_loan_id            ON emi_schedule(loan_id);
 CREATE INDEX idx_emi_due_date           ON emi_schedule(due_date);
+CREATE INDEX idx_investments_user_id    ON investments(user_id);
+CREATE INDEX idx_investments_status     ON investments(status);
+CREATE INDEX idx_investments_maturity   ON investments(maturity_date);
