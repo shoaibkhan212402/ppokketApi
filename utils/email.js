@@ -65,7 +65,7 @@ const getTransporter = async () => {
 
 // Corporate Header Helper for PDFs
 const drawHeader = (doc, titleText) => {
-  doc.fontSize(15).fillColor('#1e3a8a').text('PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', { align: 'center', bold: true });
+  doc.fontSize(15).fillColor('#1e3a8a').text('PPOKKET PRIVATE LIMITED', { align: 'center', bold: true });
   doc.fontSize(8.5).fillColor('#475569').text('Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', { align: 'center' });
   doc.text('Partnered with RBI-registered NBFCs', { align: 'center' });
   doc.strokeColor('#cbd5e1').lineWidth(1).moveTo(50, 95).lineTo(562, 95).stroke();
@@ -77,7 +77,7 @@ const drawHeader = (doc, titleText) => {
 // Corporate Footer Helper for PDFs
 const drawFooter = (doc) => {
   doc.strokeColor('#cbd5e1').lineWidth(0.5).moveTo(50, doc.page.height - 65).lineTo(562, doc.page.height - 65).stroke();
-  doc.fontSize(6.5).fillColor('#64748b').text('CIN: U65999DL2024PTC123456 | GSTIN: 07AAMCP1234A1Z1 | Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', 50, doc.page.height - 58, { align: 'center' });
+  doc.fontSize(6.5).fillColor('#64748b').text('CIN: U66190DL2026PTC467837 | GSTIN: 07AAMCP1234A1Z1 | Registered Office: 1698, JJ Colony, Madanpur Khadar, Sarita Vihar, New Delhi - 110076', 50, doc.page.height - 58, { align: 'center' });
   doc.text('Phone: 033 6645 2400 | Email: support@ppokket.com | Website: www.ppokket.com', { align: 'center' });
 };
 
@@ -262,7 +262,7 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
     doc1.fontSize(9.5).fillColor('#1e3a8a').text('Declaration', 50, y1, { bold: true });
     y1 += 14;
 
-    const declarationText = `I the undersigned wish to apply to Ppokket Financial Services Private Limited for a loan of ${formatINR(principal)} for ${term} Months at the Annualized Percentage Rate of Interest ${apr}%, Annualised Rate of Interest ${annualizedROI}% and Annualised Effective Rate of Interest ${effectiveROI}%.
+    const declarationText = `I the undersigned wish to apply to Ppokket Private Limited for a loan of ${formatINR(principal)} for ${term} Months at the Annualized Percentage Rate of Interest ${apr}%, Annualised Rate of Interest ${annualizedROI}% and Annualised Effective Rate of Interest ${effectiveROI}%.
 
 I agree and acknowledge that the lender is entitled to deduct processing fee of Rs. ${loan.processing_fee}, autopay setup charge of Rs ₹0 and autopay maintenance charge of Rs ₹0, which includes applicable taxes, from the Principal Amount. The lender is further entitled to charge penal Charges* on repayment post due date for each repayment instalment. In case of payment after due date, the Annualised Rate of Interest ${annualizedROI}% shall be charged till the actual date of payment.
 
@@ -323,7 +323,7 @@ I hereby further confirm that I understand English Language and agree that all t
     doc1.fontSize(8.5).fillColor('#0f172a').text(`Loan Reference No. (Order ID): LREF_${loan.id}`, 50, y1);
     doc1.text(`Date: ${agreementDate}`, 350, y1);
     y1 += 16;
-    doc1.fontSize(7.5).fillColor('#334155').text(`We (PPOKKET FINANCIAL SERVICES PRIVATE LIMITED) have received your application for a personal loan of ${formatINR(principal)}. The company will require a processing time of approximately 48 hours from date of receipt of completed application.`, 50, y1, { width: 512 });
+    doc1.fontSize(7.5).fillColor('#334155').text(`We (PPOKKET PRIVATE LIMITED) have received your application for a personal loan of ${formatINR(principal)}. The company will require a processing time of approximately 48 hours from date of receipt of completed application.`, 50, y1, { width: 512 });
     y1 = doc1.y + 24;
 
     if (y1 > doc1.page.height - 100) {
@@ -331,11 +331,11 @@ I hereby further confirm that I understand English Language and agree that all t
       y1 = 50;
     }
 
-    doc1.fontSize(8.5).fillColor('#0f172a').text('For: PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', 50, y1, { bold: true });
+    doc1.fontSize(8.5).fillColor('#0f172a').text('For: PPOKKET PRIVATE LIMITED', 50, y1, { bold: true });
     y1 += 14;
     doc1.fillColor('#22c55e').text('Digitally Signed', 50, y1);
     y1 += 12;
-    doc1.fillColor('#64748b').fontSize(7.5).text(`Digitally Signed by Ppokket Financial Services Private Limited\nTimestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y1);
+    doc1.fillColor('#64748b').fontSize(7.5).text(`Digitally Signed by Ppokket Private Limited\nTimestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y1);
 
     // Draw footers on all pages for PDF 1
     const pages1 = doc1._pageBuffer;
@@ -359,7 +359,7 @@ I hereby further confirm that I understand English Language and agree that all t
     let y2 = doc2.y + 10;
     doc2.fontSize(8.5).fillColor('#0f172a');
     doc2.text(`Date: ${agreementDate}`, 50, y2);
-    doc2.text(`Name of the lender: Ppokket Financial Services Private Limited`, 250, y2);
+    doc2.text(`Name of the lender: Ppokket Private Limited`, 250, y2);
     y2 += 14;
     doc2.text(`Loan ref no.: LREF_${loan.id}`, 50, y2);
     doc2.text(`Name of digital lending app: Ppokket`, 250, y2);
@@ -631,11 +631,11 @@ I hereby further confirm that I understand English Language and agree that all t
       y2 = 50;
     }
 
-    doc2.fontSize(8.5).fillColor('#0f172a').text('Thanking You,\nFor PPOKKET FINANCIAL SERVICES PRIVATE LIMITED', 50, y2, { bold: true });
+    doc2.fontSize(8.5).fillColor('#0f172a').text('Thanking You,\nFor PPOKKET PRIVATE LIMITED', 50, y2, { bold: true });
     y2 += 28;
     doc2.fillColor('#22c55e').text('Digitally Signed', 50, y2);
     y2 += 12;
-    doc2.fillColor('#64748b').fontSize(7.5).text(`Digitally Signed by Ppokket Financial Services Private Limited\nTimestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y2);
+    doc2.fillColor('#64748b').fontSize(7.5).text(`Digitally Signed by Ppokket Private Limited\nTimestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y2);
 
     // Draw footers on KFS
     const pages2 = doc2._pageBuffer;
@@ -918,7 +918,7 @@ I hereby further confirm that I understand English Language and agree that all t
     doc3.strokeColor('#e2e8f0').lineWidth(1).moveTo(50, y3).lineTo(562, y3).stroke();
     y3 += 14;
 
-    doc3.fontSize(9.5).fillColor('#1e3a8a').text('Digitally Signed by Ppokket Financial Services Private Limited', 50, y3, { bold: true });
+    doc3.fontSize(9.5).fillColor('#1e3a8a').text('Digitally Signed by Ppokket Private Limited', 50, y3, { bold: true });
     y3 += 14;
     doc3.fontSize(8.5).fillColor('#475569').text(`Timestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}`, 50, y3);
     doc3.text(`Borrower Digital Consent IP: Verified & Logged via Click-wrap`, 50, y3 + 12);
@@ -960,15 +960,15 @@ I hereby further confirm that I understand English Language and agree that all t
     });
 
     const mailOptions = {
-      from: `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`,
+      from: `"Ppokket Private Limited" <${process.env.SMTP_USER || 'support@ppokket.com'}>`,
       replyTo: 'support@ppokket.com',
       to: emailRecipient,
       subject: `Your Loan Documents are Ready — Ppokket (Ref: ${loan.id})`,
-      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | 033 6645 2400\n\nPpokket Financial Services Private Limited`,
+      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | 033 6645 2400\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 25px;">
-            <h2 style="color: #1e3a8a; margin: 0; font-size: 20px; font-weight: bold; letter-spacing: -0.5px;">PPOKKET FINANCIAL SERVICES PRIVATE LIMITED</h2>
+            <h2 style="color: #1e3a8a; margin: 0; font-size: 20px; font-weight: bold; letter-spacing: -0.5px;">PPOKKET PRIVATE LIMITED</h2>
             <p style="font-size: 12px; color: #64748b; margin: 4px 0 0 0;">Partnered with RBI-registered NBFCs</p>
           </div>
 
@@ -1025,7 +1025,7 @@ I hereby further confirm that I understand English Language and agree that all t
 
           <hr style="border: 0; border-top: 1px solid #f1f5f9; margin: 25px 0;" />
 
-          <p style="font-size: 13px; font-weight: bold; color: #1e3a8a; margin: 0;">Digitally Signed by Ppokket Financial Services Private Limited</p>
+          <p style="font-size: 13px; font-weight: bold; color: #1e3a8a; margin: 0;">Digitally Signed by Ppokket Private Limited</p>
           <p style="font-size: 12px; color: #64748b; margin: 2px 0 0 0;">Timestamp: ${new Date(loan.agreement_accepted_at || new Date()).toLocaleString('en-IN')}</p>
           
           <p style="font-size: 11px; color: #94a3b8; margin-top: 30px; line-height: 1.4;">
@@ -1084,18 +1084,18 @@ const sendWelcomeEmail = async ({ user }) => {
     }
 
     const name = user.full_name && user.full_name !== 'Ppokket User' ? user.full_name : 'Valued Customer';
-    const from = `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`;
+    const from = `"Ppokket Private Limited" <${process.env.SMTP_USER || 'support@ppokket.com'}>`;
 
     const info = await transporter.sendMail({
       from,
       replyTo: 'support@ppokket.com',
       to: user.email,
       subject: 'Welcome to Ppokket — Your Account is Ready',
-      text: `Dear ${name},\n\nWelcome to Ppokket! Your account has been successfully registered.\n\nNext Steps:\n1. Complete Your KYC — Upload PAN, Aadhaar, and bank details to unlock your credit limit.\n2. Check Your Credit Score — Get your free Experian credit score instantly after KYC.\n3. Apply for a Loan — Once your credit limit is assigned, withdraw funds in minutes.\n\nYour login: +91 ${user.mobile} (OTP-based, no password needed)\nReferral Code: ${user.referral_code || '—'}\n\nFor support: support@ppokket.com | WhatsApp: +91 8076 813 446\n\nPpokket Financial Services Private Limited`,
+      text: `Dear ${name},\n\nWelcome to Ppokket! Your account has been successfully registered.\n\nNext Steps:\n1. Complete Your KYC — Upload PAN, Aadhaar, and bank details to unlock your credit limit.\n2. Check Your Credit Score — Get your free Experian credit score instantly after KYC.\n3. Apply for a Loan — Once your credit limit is assigned, withdraw funds in minutes.\n\nYour login: +91 ${user.mobile} (OTP-based, no password needed)\nReferral Code: ${user.referral_code || '—'}\n\nFor support: support@ppokket.com | WhatsApp: +91 8076 813 446\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 28px;">
-            <h2 style="color: #1e3a8a; margin: 0; font-size: 22px; font-weight: bold;">PPOKKET FINANCIAL SERVICES PRIVATE LIMITED</h2>
+            <h2 style="color: #1e3a8a; margin: 0; font-size: 22px; font-weight: bold;">PPOKKET PRIVATE LIMITED</h2>
             <p style="font-size: 12px; color: #64748b; margin: 4px 0 0 0;">Partnered with RBI-registered NBFCs</p>
           </div>
 
@@ -1152,18 +1152,18 @@ const sendContactAcknowledgementEmail = async ({ name, email }) => {
       return;
     }
 
-    const from = `"Ppokket Financial Services" <${process.env.SMTP_USER || 'support@ppokket.com'}>`;
+    const from = `"Ppokket Private Limited" <${process.env.SMTP_USER || 'support@ppokket.com'}>`;
 
     const info = await transporter.sendMail({
       from,
       replyTo: 'support@ppokket.com',
       to: email,
       subject: 'We have received your request — Ppokket',
-      text: `Dear ${name || 'Customer'},\n\nThank you for reaching out to Ppokket. We have received your request and our team is connecting soon.\n\nFor urgent queries, reach us at support@ppokket.com or WhatsApp us at +91 8076 813 446.\n\nPpokket Financial Services Private Limited`,
+      text: `Dear ${name || 'Customer'},\n\nThank you for reaching out to Ppokket. We have received your request and our team is connecting soon.\n\nFor urgent queries, reach us at support@ppokket.com or WhatsApp us at +91 8076 813 446.\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: auto; padding: 30px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 28px;">
-            <h2 style="color: #1e3a8a; margin: 0; font-size: 22px; font-weight: bold;">PPOKKET FINANCIAL SERVICES PRIVATE LIMITED</h2>
+            <h2 style="color: #1e3a8a; margin: 0; font-size: 22px; font-weight: bold;">PPOKKET PRIVATE LIMITED</h2>
             <p style="font-size: 12px; color: #64748b; margin: 4px 0 0 0;">Partnered with RBI-registered NBFCs</p>
           </div>
 
