@@ -6,7 +6,7 @@ const {
   processLoan, previewEMI, setWithdrawalLimit,
   getPendingKYC, reviewKYC,
   getAllTransactions, sendBulkNotification,
-  getLoanEMISchedule,
+  getLoanEMISchedule, getOverdueEmis, setPenaltyWaiver,
   updateCreditLimit, toggleUserStatus,
   changeAdminPassword, getSystemSettings, updateSystemSettings,
   // Admin management
@@ -64,6 +64,8 @@ router.put('/users/:userId/toggle-status', requirePermission('manage_users'), to
 router.put('/users/:userId/withdrawal-limit', requirePermission('manage_users'), setWithdrawalLimit);
 router.get('/loans', requirePermission('manage_loans'), getAllLoans);
 router.get('/loans/:id/emi-schedule', requirePermission('manage_loans'), getLoanEMISchedule);
+router.get('/overdue-emis', requirePermission('manage_loans'), getOverdueEmis);
+router.put('/emi/:id/penalty-waiver', requirePermission('manage_loans'), setPenaltyWaiver);
 router.put('/loans/:id/settlement', requirePermission('manage_loans'), setLoanSettlement);
 router.put('/approve-loan/:id', requirePermission('manage_loans'), approveLoan);
 router.put('/process-loan/:id', requirePermission('manage_loans'), processLoan);

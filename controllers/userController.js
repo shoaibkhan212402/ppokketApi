@@ -472,7 +472,7 @@ const getDashboard = async (req, res) => {
     let nextEmiRow = null;
     if (activeLoan.length && activeLoan[0].status === 'disbursed') {
       const [nextEmi] = await pool.query(
-        'SELECT * FROM emi_schedule WHERE user_id = ? AND status = "upcoming" ORDER BY due_date ASC LIMIT 1', [userId]
+        'SELECT * FROM emi_schedule WHERE user_id = ? AND status IN ("upcoming","overdue") ORDER BY due_date ASC LIMIT 1', [userId]
       );
       nextEmiRow = nextEmi[0] || null;
     }

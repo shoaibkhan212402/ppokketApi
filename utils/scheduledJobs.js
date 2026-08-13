@@ -126,7 +126,7 @@ const sendEmiReminders = async () => {
 
       // Push notification
       if (emi.fcm_token) {
-        sendNotification(emi.fcm_token, '⏰ EMI Due in 3 Days', msg, { screen: 'Loans' }).catch(() => {});
+        sendNotification(emi.fcm_token, '⏰ EMI Due in 3 Days', msg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
       }
 
       // In-app notification
@@ -150,7 +150,7 @@ const sendEmiReminders = async () => {
       const total = parseFloat(emi.emi_amount) + parseFloat(emi.penalty_amount || 0);
       const msg   = `Your EMI of ${formatINR(emi.emi_amount)} was due yesterday. Penalty of ${formatINR(emi.penalty_amount || 0)} has been added. Total due: ${formatINR(total)}. Pay now to avoid further charges. - Ppokket`;
       if (emi.fcm_token) {
-        sendNotification(emi.fcm_token, '❗ EMI Overdue', msg, { screen: 'Loans' }).catch(() => {});
+        sendNotification(emi.fcm_token, '❗ EMI Overdue', msg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
       }
       await pool.query(
         'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
@@ -272,7 +272,7 @@ const processAutoDebits = async () => {
           );
 
           if (emi.fcm_token) {
-            sendNotification(emi.fcm_token, 'Auto-Debit Successful ✅', msg, { screen: 'Loans' }).catch(() => {});
+            sendNotification(emi.fcm_token, 'Auto-Debit Successful ✅', msg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
           }
 
           await conn.commit();
@@ -321,7 +321,7 @@ const processAutoDebits = async () => {
             );
 
             if (emi.fcm_token) {
-              sendNotification(emi.fcm_token, 'Auto-Debit Failed ⚠️', failMsg, { screen: 'Loans' }).catch(() => {});
+              sendNotification(emi.fcm_token, 'Auto-Debit Failed ⚠️', failMsg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
             }
           }
         } catch (apiErr) {

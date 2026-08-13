@@ -242,6 +242,7 @@ CREATE TABLE IF NOT EXISTS emi_schedule (
   paid_amount      DECIMAL(12,2) DEFAULT 0.00,
   penalty_amount   DECIMAL(10,2) DEFAULT 0.00,
   penalty_days     INT DEFAULT 0,
+  penalty_waived   TINYINT(1) DEFAULT 0,
   status           ENUM('upcoming','paid','overdue') DEFAULT 'upcoming',
   paid_at          TIMESTAMP NULL,
   FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE,

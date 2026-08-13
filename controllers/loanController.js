@@ -153,7 +153,7 @@ const getLoanHistory = async (req, res) => {
     const [loans] = await pool.query(
       `SELECT l.*,
         (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date,
-        (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
+        (SELECT e.emi_amount + IF(e.penalty_waived, 0, e.penalty_amount) FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
         (SELECT IFNULL(SUM(e.principal_amount), 0) FROM emi_schedule e WHERE e.loan_id = l.id AND e.status = 'paid') AS principal_paid
        FROM loans l WHERE l.user_id = ? ORDER BY l.created_at DESC`,
       [req.user.id]
@@ -386,9 +386,9 @@ const requestWithdrawal = async (req, res) => {
     if (userRows.length && userRows[0].fcm_token) {
       sendNotification(
         userRows[0].fcm_token, 
-        'Withdrawal Requested 💸', 
-        `Your withdrawal request for ₹${loan.amount} has been received.`, 
-        { screen: 'Loans' }
+        'Withdrawal Requested 💸',
+        `Your withdrawal request for ₹${loan.amount} has been received.`,
+        { screen: 'Profile', params: { screen: 'LoanHistory' } }
       ).catch(e => console.error('[requestWithdrawal push notification]', e));
     }
 

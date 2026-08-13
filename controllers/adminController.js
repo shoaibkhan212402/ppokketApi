@@ -27,6 +27,7 @@ const getAdminDashboard = async (req, res) => {
       [[totalDisbursed]] = await pool.query("SELECT COALESCE(SUM(l.amount),0) as total FROM loans l JOIN users u ON u.id = l.user_id WHERE l.status = 'disbursed' AND u.assigned_partner_id = ?", [req.admin.id]);
       [[totalCollected]] = await pool.query("SELECT COALESCE(SUM(t.amount),0) as total FROM transactions t JOIN users u ON u.id = t.user_id WHERE t.status = 'success' AND t.type = 'emi' AND u.assigned_partner_id = ?", [req.admin.id]);
       [[pendingKYC]] = await pool.query("SELECT COUNT(*) as count FROM kyc_documents kd JOIN users u ON u.id = kd.user_id WHERE kd.status = 'pending' AND u.assigned_partner_id = ?", [req.admin.id]);
+      const [[overdueEmis]] = await pool.query("SELECT COUNT(*) as count FROM emi_schedule e JOIN users u ON u.id = e.user_id WHERE e.status = 'overdue' AND u.assigned_partner_id = ?", [req.admin.id]);
 
       [recentLoans] = await pool.query(
         `SELECT l.*, u.full_name, u.mobile,
@@ -56,6 +57,7 @@ const getAdminDashboard = async (req, res) => {
           total_disbursed: parseFloat(totalDisbursed.total),
           total_collected: parseFloat(totalCollected.total),
           pending_kyc: pendingKYC.count,
+          overdue_emis: overdueEmis.count,
         },
         lead_pipeline,
         recent_loans: recentLoans,
@@ -82,6 +84,7 @@ const getAdminDashboard = async (req, res) => {
     }
 
     const [[pendingContact]] = await pool.query("SELECT COUNT(*) as count FROM contact_messages WHERE is_read = 0");
+    const [[overdueEmisAll]] = await pool.query("SELECT COUNT(*) as count FROM emi_schedule WHERE status = 'overdue'");
 
     const response = {
       success: true,
@@ -94,6 +97,7 @@ const getAdminDashboard = async (req, res) => {
         total_collected: parseFloat(totalCollected.total),
         pending_kyc: pendingKYC.count,
         pending_contact_messages: pendingContact.count,
+        overdue_emis: overdueEmisAll.count,
       },
       recent_loans: recentLoans,
     };
@@ -581,7 +585,7 @@ const rejectLoan = async (req, res) => {
 
     const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [loan[0].user_id]);
     if (user[0]?.fcm_token) {
-      await sendNotification(user[0].fcm_token, title, message, { screen: 'Loans' });
+      await sendNotification(user[0].fcm_token, title, message, { screen: 'Profile', params: { screen: 'LoanHistory' } });
     }
 
     await auditLog({
@@ -910,7 +914,7 @@ const disburseLoan = async (req, res) => {
     pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]).then(([u]) => {
       if (u[0]?.fcm_token) {
         sendNotification(u[0].fcm_token, '💰 Loan Disbursed!',
-          `₹${payoutAmount} disbursed to your ${bank[0].bank_name} account.`, { screen: 'Loans' });
+          `₹${payoutAmount} disbursed to your ${bank[0].bank_name} account.`, { screen: 'Profile', params: { screen: 'LoanHistory' } });
       }
     }).catch(() => { });
 
@@ -961,6 +965,104 @@ const getLoanEMISchedule = async (req, res) => {
     return res.json({ success: true, emi_schedule: mappedPreview });
   } catch (err) {
     console.error('[getLoanEMISchedule]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/overdue-emis — cross-loan penalty view so collections doesn't
+// have to open each loan individually. Two modes via ?filter=:
+//   outstanding (default) — currently overdue, unpaid installments
+//   paid_late              — installments that were overdue (penalty accrued)
+//                             but have since been paid, for history/audit
+const getOverdueEmis = async (req, res) => {
+  try {
+    const { search = '', filter = 'outstanding' } = req.query;
+    const isPaidLate = filter === 'paid_late';
+    const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
+
+    let query = `
+      SELECT e.id, e.loan_id, e.installment_no, e.due_date, e.emi_amount,
+             e.penalty_amount, e.penalty_days, e.penalty_waived, e.status,
+             e.paid_at, e.paid_amount,
+             l.amount AS loan_amount, l.duration_months, l.interest_rate,
+             u.id AS user_id, u.full_name, u.mobile, u.email
+        FROM emi_schedule e
+        JOIN loans l ON l.id = e.loan_id
+        JOIN users u ON u.id = e.user_id
+       WHERE ${isPaidLate ? "e.status = 'paid' AND (e.penalty_amount > 0 OR e.penalty_days > 0)" : "e.status = 'overdue'"}
+    `;
+    const params = [];
+
+    if (isPartner) {
+      query += ' AND u.assigned_partner_id = ?';
+      params.push(req.admin.id);
+    }
+    if (search) {
+      query += ' AND (u.full_name LIKE ? OR u.mobile LIKE ? OR u.email LIKE ?)';
+      const s = `%${search}%`;
+      params.push(s, s, s);
+    }
+    query += isPaidLate ? ' ORDER BY e.paid_at DESC' : ' ORDER BY e.penalty_amount DESC, e.due_date ASC';
+
+    const [emis] = await pool.query(query, params);
+
+    const summary = isPaidLate
+      ? emis.reduce((acc, e) => {
+          acc.count += 1;
+          const p = Number(e.penalty_amount) || 0;
+          if (e.penalty_waived) acc.total_penalty_waived += p;
+          else acc.total_penalty_collected += p;
+          return acc;
+        }, { count: 0, total_penalty_collected: 0, total_penalty_waived: 0 })
+      : emis.reduce((acc, e) => {
+          acc.count += 1;
+          acc.total_emi_due += Number(e.emi_amount) || 0;
+          acc.total_penalty += e.penalty_waived ? 0 : (Number(e.penalty_amount) || 0);
+          return acc;
+        }, { count: 0, total_emi_due: 0, total_penalty: 0 });
+
+    res.json({ success: true, emis, summary, filter: isPaidLate ? 'paid_late' : 'outstanding' });
+  } catch (err) {
+    console.error('[getOverdueEmis]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/emi/:id/penalty-waiver — waive or reinstate the late penalty
+// on a single overdue installment (e.g. after a call with the customer agreeing
+// to pay the EMI without the fine). Only allowed while still overdue/unpaid —
+// once paid, the charge is already settled and can't be un-collected here.
+const setPenaltyWaiver = async (req, res) => {
+  try {
+    const emiId = req.params.id;
+    const { waived } = req.body;
+    if (typeof waived !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'waived (boolean) is required' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT e.*, u.full_name FROM emi_schedule e JOIN users u ON u.id = e.user_id WHERE e.id = ?`,
+      [emiId]
+    );
+    if (!rows.length) return res.status(404).json({ success: false, message: 'EMI not found' });
+    const emi = rows[0];
+    if (emi.status !== 'overdue') {
+      return res.status(400).json({ success: false, message: `Cannot change penalty waiver — EMI status is '${emi.status}', not overdue.` });
+    }
+
+    await pool.query('UPDATE emi_schedule SET penalty_waived = ? WHERE id = ?', [waived ? 1 : 0, emiId]);
+
+    await auditLog({
+      req,
+      action: waived ? 'penalty_waived' : 'penalty_unwaived',
+      entityType: 'emi_schedule',
+      entityId: Number(emiId),
+      details: { loan_id: emi.loan_id, installment_no: emi.installment_no, penalty_amount: emi.penalty_amount, user: emi.full_name },
+    });
+
+    res.json({ success: true, message: waived ? 'Penalty waived' : 'Penalty reinstated' });
+  } catch (err) {
+    console.error('[setPenaltyWaiver]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -1581,7 +1683,7 @@ module.exports = {
   processLoan, previewEMI, setWithdrawalLimit,
   getPendingKYC, reviewKYC,
   getAllTransactions, sendBulkNotification,
-  getLoanEMISchedule,
+  getLoanEMISchedule, getOverdueEmis, setPenaltyWaiver,
   updateCreditLimit, toggleUserStatus,
   changeAdminPassword, getSystemSettings, updateSystemSettings,
   // Admin management

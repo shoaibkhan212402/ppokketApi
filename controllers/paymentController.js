@@ -7,7 +7,7 @@ const { invalidateUserCache } = require('../config/redis');
 // POST /api/payment/create-order
 const createOrder = async (req, res) => {
   try {
-    const { loan_id, investment_id, amount, emi_id, is_settlement } = req.body;
+    const { loan_id, investment_id, is_settlement } = req.body;
     const userId = req.user.id;
 
     if (!loan_id && !investment_id) {
@@ -59,12 +59,22 @@ const createOrder = async (req, res) => {
         descriptionText = `Settlement payment for loan #${loan_id}`;
         paymentType = 'settlement';
       } else {
-        const regularAmount = amount || emi_id;
-        if (!regularAmount) {
-          return res.status(400).json({ success: false, message: 'amount required' });
+        // Charge amount is never trusted from the client — derive it from the
+        // earliest unpaid/overdue EMI row, including any accrued late penalty,
+        // the same row verifyPayment() will mark paid on success.
+        const [emiRows] = await pool.query(
+          `SELECT * FROM emi_schedule
+            WHERE loan_id = ? AND status IN ('upcoming', 'overdue')
+            ORDER BY due_date ASC LIMIT 1`,
+          [loan_id]
+        );
+        if (!emiRows.length) {
+          return res.status(400).json({ success: false, message: 'No pending EMI found for this loan.' });
         }
-        amountVal = regularAmount;
-        descriptionText = `EMI payment for loan #${loan_id}`;
+        const emi = emiRows[0];
+        const penalty = emi.penalty_waived ? 0 : parseFloat(emi.penalty_amount || 0);
+        amountVal = parseFloat(emi.emi_amount) + penalty;
+        descriptionText = `EMI #${emi.installment_no} payment for loan #${loan_id}` + (penalty > 0 ? ` (incl. ₹${penalty.toFixed(2)} penalty)` : '');
         paymentType = 'emi';
       }
       refLoanId = loan_id;
@@ -314,9 +324,9 @@ const verifyPayment = async (req, res) => {
     const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]);
     if (user[0]?.fcm_token) {
       if (txn[0].investment_id) {
-        sendNotification(user[0].fcm_token, 'Investment Active 🎉', `Your investment of ₹${paidAmount} is now active.`, { screen: 'Investments' }).catch(() => {});
+        sendNotification(user[0].fcm_token, 'Investment Active 🎉', `Your investment of ₹${paidAmount} is now active.`, { screen: 'Investment' }).catch(() => {});
       } else {
-        sendNotification(user[0].fcm_token, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received.`, { screen: 'Loans' }).catch(() => {});
+        sendNotification(user[0].fcm_token, 'Payment Successful ✅', `Your EMI payment of ₹${paidAmount} has been received.`, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
       }
     }
 
