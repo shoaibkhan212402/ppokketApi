@@ -13,7 +13,7 @@ const MIME_TO_EXT = {
 
 class FTPStorage {
   constructor({ host, user, password, port = 21, rootUrl, uploadDir = '/uploads/kyc' }) {
-    this.host      = host;
+    this.host      = host ? host.replace(/^ftp:\/\//i, '').replace(/\/$/, '') : host;
     this.user      = user;
     this.password  = password;
     this.port      = Number(port) || 21;
