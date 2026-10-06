@@ -17,9 +17,12 @@ const ADMIN_MAX_ATTEMPTS = 5;
 const ADMIN_LOCK_SECONDS = 15 * 60;
 
 // The password the super-admin account used to be seeded with. It was in
-// schema.sql and printed on the login page, so it is public knowledge: it is
-// refused for every account, whether or not the account still has it.
+// schema.sql and printed on the login page, so it is public knowledge. A
+// production server refuses it for every account, whether or not the account
+// still has it; anywhere else it is accepted, so it can remain the easy
+// password on a development machine.
 const RETIRED_DEFAULT_PASSWORD = 'Admin@123';
+const isRefusedPassword = (password) => process.env.NODE_ENV === 'production' && password === RETIRED_DEFAULT_PASSWORD;
 
 // Generate JWT
 const generateToken = (id, role = 'user') => {
@@ -315,7 +318,7 @@ const adminLogin = async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password required' });
 
-    if (password === RETIRED_DEFAULT_PASSWORD) {
+    if (isRefusedPassword(password)) {
       console.error(`[adminLogin] Refused the retired default password for ${email}. If the account still has it, set a new one: node scripts/create_superadmin.js <email> <new-password>`);
       return res.status(403).json({
         success: false,
@@ -392,5 +395,5 @@ const adminLogin = async (req, res) => {
   }
 };
 
-module.exports = { sendOTP, verifyOTP, demoLogin, adminLogin, RETIRED_DEFAULT_PASSWORD };
+module.exports = { sendOTP, verifyOTP, demoLogin, adminLogin, isRefusedPassword };
 

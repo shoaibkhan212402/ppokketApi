@@ -264,7 +264,8 @@ CREATE TABLE IF NOT EXISTS contact_messages (
 
 -- No admin account is seeded. A schema file is public to everyone with the
 -- code, so a password written here is no password at all (the old seed,
--- admin@ppokket.com / Admin@123, is now refused at login for that reason).
+-- admin@ppokket.com / Admin@123, is refused at login by a production server
+-- for that reason).
 -- Create the first super admin with:
 --   node scripts/create_superadmin.js <email> <password> [name]
 

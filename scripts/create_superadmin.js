@@ -11,8 +11,8 @@ async function createSuperAdmin() {
     process.exit(1);
   }
   if (password === 'Admin@123') {
-    console.error('That was the old seeded password and is refused at login. Choose a different one.');
-    process.exit(1);
+    console.warn('Warning: this is the old default password and is publicly known. It works on a development');
+    console.warn('server only — a production server (NODE_ENV=production) refuses it at sign-in.');
   }
 
   const email = rawEmail.toLowerCase().trim();

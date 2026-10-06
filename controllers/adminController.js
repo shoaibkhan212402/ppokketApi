@@ -8,9 +8,9 @@ const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { getUserCreditDetails } = require('./userController');
-const { RETIRED_DEFAULT_PASSWORD } = require('./authController');
+const { isRefusedPassword } = require('./authController');
 
-// adminLogin refuses this password, so an account given it could never sign in.
+// A password adminLogin refuses on this server: an account given it could never sign in.
 const UNUSABLE_PASSWORD_MESSAGE = 'That password cannot be used. Please choose a different one.';
 
 // GET /api/admin/dashboard
@@ -1160,7 +1160,7 @@ const changeAdminPassword = async (req, res) => {
     if (!current_password || !new_password) {
       return res.status(400).json({ success: false, message: 'Current and new password required' });
     }
-    if (new_password === RETIRED_DEFAULT_PASSWORD) {
+    if (isRefusedPassword(new_password)) {
       return res.status(400).json({ success: false, message: UNUSABLE_PASSWORD_MESSAGE });
     }
 
@@ -1302,7 +1302,7 @@ const createAdmin = async (req, res) => {
     if (!['admin', 'reviewer', 'dsa_partner', 'bank_partner'].includes(role)) {
       return res.status(400).json({ success: false, message: 'Role must be admin, reviewer, dsa_partner, or bank_partner' });
     }
-    if (password === RETIRED_DEFAULT_PASSWORD) {
+    if (isRefusedPassword(password)) {
       return res.status(400).json({ success: false, message: UNUSABLE_PASSWORD_MESSAGE });
     }
     const [existing] = await pool.query('SELECT id FROM admins WHERE email = ?', [email]);
@@ -1360,7 +1360,7 @@ const updateAdmin = async (req, res) => {
     if (existing[0].role === 'super_admin' && req.admin.id !== targetId) {
       return res.status(403).json({ success: false, message: 'Cannot modify another super admin' });
     }
-    if (password === RETIRED_DEFAULT_PASSWORD) {
+    if (isRefusedPassword(password)) {
       return res.status(400).json({ success: false, message: UNUSABLE_PASSWORD_MESSAGE });
     }
 
