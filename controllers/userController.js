@@ -146,7 +146,7 @@ const updateProfile = async (req, res) => {
             );
             // Push notification for referrer
             if (referrerFcmToken) {
-              await sendNotification(referrerFcmToken, title, message, { screen: 'Referrals' });
+              await sendNotification(referrerFcmToken, title, message, { screen: 'Profile' });
             }
           } else {
             return res.status(400).json({ success: false, message: 'You cannot refer yourself.' });
@@ -469,6 +469,11 @@ const getDashboard = async (req, res) => {
     const [activeLoan] = await pool.query(
       'SELECT * FROM loans WHERE user_id = ? AND status IN ("disbursed","approved","withdrawal_requested") ORDER BY created_at DESC LIMIT 1', [userId]
     );
+    // An application still waiting on review isn't an "active" loan, but the
+    // home screen needs it to say "under review" instead of "limit ready".
+    const [pendingLoan] = await pool.query(
+      'SELECT * FROM loans WHERE user_id = ? AND status IN ("pending","under_review") ORDER BY created_at DESC LIMIT 1', [userId]
+    );
     let nextEmiRow = null;
     if (activeLoan.length && activeLoan[0].status === 'disbursed') {
       const [nextEmi] = await pool.query(
@@ -492,6 +497,7 @@ const getDashboard = async (req, res) => {
         ...userRows[0],
         kyc_status,
         active_loan: activeLoan[0] || null,
+        pending_loan: pendingLoan[0] || null,
         next_emi: nextEmiRow,
         recent_transactions: recentTxn,
         unread_notifications: unreadNotif[0]?.count || 0,

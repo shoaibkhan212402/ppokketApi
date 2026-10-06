@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { pool } = require('../config/db');
@@ -15,6 +16,11 @@ const OTP_SEND_WINDOW_SECONDS     = 60 * 60;  // 1 hour
 const ADMIN_MAX_ATTEMPTS = 5;
 const ADMIN_LOCK_SECONDS = 15 * 60;
 
+// The password the super-admin account used to be seeded with. It was in
+// schema.sql and printed on the login page, so it is public knowledge: it is
+// refused for every account, whether or not the account still has it.
+const RETIRED_DEFAULT_PASSWORD = 'Admin@123';
+
 // Generate JWT
 const generateToken = (id, role = 'user') => {
   return jwt.sign({ id, role }, process.env.JWT_SECRET, {
@@ -22,8 +28,8 @@ const generateToken = (id, role = 'user') => {
   });
 };
 
-// Generate a cryptographically random 6-digit OTP
-const generateOTP = () => String(Math.floor(100000 + Math.random() * 900000));
+// Generate a cryptographically random 6-digit OTP (100000–999999)
+const generateOTP = () => String(crypto.randomInt(100000, 1000000));
 
 // Dev & Play Store Reviewer test credentials
 const DEV_TEST_MOBILE = process.env.DEV_TEST_MOBILE || '9999999999';
@@ -309,6 +315,15 @@ const adminLogin = async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password required' });
 
+    if (password === RETIRED_DEFAULT_PASSWORD) {
+      console.error(`[adminLogin] Refused the retired default password for ${email}. If the account still has it, set a new one: node scripts/create_superadmin.js <email> <new-password>`);
+      return res.status(403).json({
+        success: false,
+        code: 'DEFAULT_PASSWORD_RETIRED',
+        message: 'This password is no longer accepted. A new password has to be set for this account before it can sign in.',
+      });
+    }
+
     // Per-account lockout on top of the route's per-IP rate limit — mirrors
     // the OTP lockout pattern so credential stuffing from many IPs against
     // one admin account still gets stopped.
@@ -377,5 +392,5 @@ const adminLogin = async (req, res) => {
   }
 };
 
-module.exports = { sendOTP, verifyOTP, demoLogin, adminLogin };
+module.exports = { sendOTP, verifyOTP, demoLogin, adminLogin, RETIRED_DEFAULT_PASSWORD };
 

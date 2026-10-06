@@ -58,7 +58,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
       'https://api.ppokket.com',
     ];
 
-app.use(cors({
+const corsMiddleware = cors({
   origin: (origin, callback) => {
     // allow requests with no origin (like mobile apps, postman, curl)
     if (!origin) return callback(null, true);
@@ -68,7 +68,13 @@ app.use(cors({
     return callback(new Error('CORS Policy: Origin not allowed'));
   },
   credentials: true,
-}));
+});
+// Razorpay's redirect-mode checkout returns the browser with a cross-site form
+// POST carrying Razorpay's Origin. That is a page navigation, not an XHR, so
+// the origin allow-list doesn't apply — and would otherwise reject it outright.
+// The same goes for Cashfree sending the browser back from Auto-Pay authorisation.
+const CORS_EXEMPT_PATHS = ['/api/payment/razorpay/callback', '/api/payment/mandate/return'];
+app.use((req, res, next) => (CORS_EXEMPT_PATHS.includes(req.path) ? next() : corsMiddleware(req, res, next)));
 
 // Global rate limiter
 const limiter = rateLimit({
@@ -81,10 +87,11 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // Body parsing — capture raw body for payment webhook signature verification
+// (/api/payment/webhook for Cashfree, /api/payment/webhook/razorpay for Razorpay)
 app.use(express.json({
   limit: '10mb',
   verify: (req, _res, buf, encoding) => {
-    if (req.originalUrl === '/api/payment/webhook') {
+    if (req.originalUrl.startsWith('/api/payment/webhook')) {
       req.rawBody = buf.toString(encoding || 'utf8');
     }
   },

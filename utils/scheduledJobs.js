@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { pool } = require('../config/db');
+const { AWAITING_AUTO_DEBIT, raiseAutoDebits, reconcileAutoDebits, syncPendingMandates } = require('./autoPay');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -33,12 +34,16 @@ const markOverdueAndCalcPenalty = async () => {
 
     await conn.beginTransaction();
 
-    // Step 1 — mark newly overdue EMIs
+    // Step 1 — mark newly overdue EMIs. One whose auto-debit is still with
+    // the bank is left alone: the customer was debited on time and the result
+    // simply hasn't come back yet. If the debit fails, the EMI is picked up on
+    // the next run and its penalty is still counted from the due date.
     await conn.query(
-      `UPDATE emi_schedule
-         SET status = 'overdue'
-       WHERE status = 'upcoming'
-         AND due_date < CURDATE()`
+      `UPDATE emi_schedule e
+         SET e.status = 'overdue'
+       WHERE e.status = 'upcoming'
+         AND e.due_date < CURDATE()
+         AND NOT (${AWAITING_AUTO_DEBIT})`
     );
 
     // Step 2 — calculate penalty for all overdue, unpaid, non-waived EMIs
@@ -178,235 +183,72 @@ const cleanOldAuditLogs = async () => {
   }
 };
 
-// ── JOB 4: Daily EMI Auto-Debits via Cashfree (runs at 09:30 every day) ────────
+// ── JOB 4: EMI Auto-Debits via Cashfree ───────────────────────────────────────
+//   A bank debit cannot be presented the day it is raised, so each EMI is
+//   raised the day before it falls due and scheduled for its due date. The
+//   job runs three times a day: an EMI is only ever raised once, so the later
+//   runs just pick up anything an earlier one missed (a restart, or a mandate
+//   or earlier EMI that only became ready during the day).
+//   The bank's answer arrives by webhook; reconcileAutoDebits is the safety
+//   net that asks Cashfree about anything still unanswered. See utils/autoPay.js.
 const processAutoDebits = async () => {
-  const conn = await pool.getConnection();
-  const crypto = require('crypto');
   try {
     console.log('[cron] Running EMI Auto-Debit job...');
-
-    // Find all upcoming EMIs due today where the user has an active mandate
-    const [dueEmis] = await conn.query(
-      `SELECT e.id AS emi_id, e.loan_id, e.installment_no, e.emi_amount, e.due_date,
-              u.id AS user_id, u.full_name, u.mobile, u.fcm_token,
-              m.subscription_id, m.payment_mode
-         FROM emi_schedule e
-         JOIN bank_mandates m ON m.user_id = e.user_id AND m.status = 'active'
-         JOIN users u ON u.id = e.user_id
-        WHERE e.status = 'upcoming'
-          AND e.due_date = CURDATE()`
-    );
-
-    console.log(`[cron] Found ${dueEmis.length} due EMIs with active mandates to process.`);
-
-    const appId = process.env.CASHFREE_APP_ID;
-    const secretKey = process.env.CASHFREE_SECRET_KEY;
-    const cfEnv = process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox';
-    const isMockGlobal = !appId || appId.includes('placeholder') || !secretKey || secretKey.includes('placeholder');
-    if (isMockGlobal && process.env.NODE_ENV === 'production') {
-      console.error('⚠️  [cron][AutoDebit] CASHFREE_APP_ID/CASHFREE_SECRET_KEY missing or placeholder in PRODUCTION — auto-debits are running in MOCK mode (EMIs will be marked paid with no real charge). Fix env vars immediately.');
-    }
-    const baseUrl = cfEnv === 'production' ? 'https://api.cashfree.com' : 'https://sandbox.cashfree.com';
-
-    const { sendNotification } = require('./fcm');
-
-    for (const emi of dueEmis) {
-      console.log(`[cron][AutoDebit] Processing EMI #${emi.installment_no} of Loan #${emi.loan_id} for user ${emi.full_name} (${emi.emi_amount} INR)...`);
-
-      const isMock = isMockGlobal || emi.payment_mode === 'mock';
-      const orderId = `auto_${emi.loan_id}_${emi.installment_no}_${Date.now()}`;
-      const paymentId = isMock ? `pay_auto_mock_${crypto.randomBytes(6).toString('hex')}` : `pay_auto_${Date.now()}`;
-
-      // Insert pending transaction
-      await conn.query(
-        `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, razorpay_payment_id, amount, type, status, description)
-         VALUES (?, ?, ?, ?, ?, 'emi', 'pending', ?)`,
-        [
-          emi.user_id,
-          emi.loan_id,
-          orderId,
-          isMock ? paymentId : null,
-          emi.emi_amount,
-          `Automatic EMI payment (Installment #${emi.installment_no})`
-        ]
-      );
-
-      if (isMock) {
-        // In mock mode, complete the payment successfully right away
-        await conn.beginTransaction();
-        try {
-          // Update transaction
-          await conn.query(
-            "UPDATE transactions SET status = 'success' WHERE razorpay_order_id = ?",
-            [orderId]
-          );
-
-          // Update loan paid amount
-          await conn.query(
-            "UPDATE loans SET amount_paid = amount_paid + ? WHERE id = ?",
-            [emi.emi_amount, emi.loan_id]
-          );
-
-          // Update EMI status
-          await conn.query(
-            "UPDATE emi_schedule SET status = 'paid', paid_amount = ?, paid_at = NOW() WHERE id = ?",
-            [emi.emi_amount, emi.emi_id]
-          );
-
-          // Check if loan fully closed — count remaining unpaid/non-waived EMIs
-          const [[{ remaining }]] = await conn.query(
-            `SELECT COUNT(*) AS remaining FROM emi_schedule
-              WHERE loan_id = ? AND status NOT IN ('paid', 'waived')`,
-            [emi.loan_id]
-          );
-          if (remaining === 0) {
-            await conn.query("UPDATE loans SET status = 'closed' WHERE id = ?", [emi.loan_id]);
-            await conn.query("UPDATE bank_mandates SET status = 'inactive' WHERE user_id = ?", [emi.user_id]);
-          }
-
-          // Send confirmation notifications
-          const msg = `Auto-Debit Successful: ₹${emi.emi_amount} was successfully auto-debited for EMI #${emi.installment_no} of Loan #${emi.loan_id}.`;
-          await conn.query(
-            'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-            [emi.user_id, 'Auto-Debit Successful ✅', msg, 'payment']
-          );
-
-          if (emi.fcm_token) {
-            sendNotification(emi.fcm_token, 'Auto-Debit Successful ✅', msg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
-          }
-
-          await conn.commit();
-          console.log(`[cron][AutoDebit] Mandate success (mock) for EMI #${emi.emi_id}`);
-        } catch (dbErr) {
-          await conn.rollback();
-          console.error(`[cron][AutoDebit] DB Error in mock transaction execution:`, dbErr.message);
-        }
-      } else {
-        // Call Cashfree Raise Charge API
-        try {
-          const payUrl = `${baseUrl}/pg/subscriptions/pay`;
-          const payRes = await fetch(payUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Client-Id': appId,
-              'X-Client-Secret': secretKey
-            },
-            body: JSON.stringify({
-              subscription_id: emi.subscription_id,
-              payment_id: orderId,
-              payment_amount: parseFloat(emi.emi_amount),
-              payment_remarks: `Auto recovery EMI #${emi.installment_no} for Loan #${emi.loan_id}`,
-              payment_type: 'CHARGE'
-            })
-          });
-
-          const payData = await payRes.json();
-
-          if (payRes.status === 200) {
-            console.log(`[cron][AutoDebit] Cashfree charge initiated successfully for sub_id ${emi.subscription_id}:`, payData);
-          } else {
-            console.error(`[cron][AutoDebit] Cashfree charge failed for sub_id ${emi.subscription_id}:`, payData);
-            // Mark transaction failed
-            await conn.query(
-              "UPDATE transactions SET status = 'failed', description = ? WHERE razorpay_order_id = ?",
-              [`Cashfree Auto-Debit Failed: ${payData.message || 'Unknown error'}`, orderId]
-            );
-
-            // Notify user about auto-debit failure
-            const failMsg = `Auto-Debit Failed: Automatic deduction of ₹${emi.emi_amount} failed. Please pay manually to avoid overdue charges.`;
-            await conn.query(
-              'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-              [emi.user_id, 'Auto-Debit Failed ⚠️', failMsg, 'payment']
-            );
-
-            if (emi.fcm_token) {
-              sendNotification(emi.fcm_token, 'Auto-Debit Failed ⚠️', failMsg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
-            }
-          }
-        } catch (apiErr) {
-          console.error(`[cron][AutoDebit] API request exception for sub_id ${emi.subscription_id}:`, apiErr.message);
-          await conn.query(
-            "UPDATE transactions SET status = 'failed', description = ? WHERE razorpay_order_id = ?",
-            [`API error: ${apiErr.message}`, orderId]
-          );
-        }
-      }
-    }
+    await raiseAutoDebits();
   } catch (err) {
     console.error('[cron][auto-debit-job]', err.message);
-  } finally {
-    conn.release();
   }
 };
 
-// ── JOB 5: Mature fixed-return investments and credit payout (runs at 00:15 every day) ──
-//   Finds all active investments whose maturity_date has arrived, credits the
-//   locked-in maturity_amount to wallet_balance, and records the payout as a
-//   transaction. Processed per-row (own connection + row lock) rather than as
-//   one big batch transaction, since this is real money being credited and
-//   must stay safe to re-run manually without double-crediting a row.
+const reconcilePendingAutoDebits = async () => {
+  try {
+    await reconcileAutoDebits();
+    await syncPendingMandates();
+  } catch (err) {
+    console.error('[cron][auto-debit-reconcile]', err.message);
+  }
+};
+
+// ── JOB 5: Tell users their fixed-return investment has matured (runs at 00:15 every day) ──
+//   Maturity does not close the investment or credit anything by itself: the
+//   investment stays 'active' and the user asks for the payout from the app /
+//   website (POST /api/investment/withdraw/:id). That request is what captures
+//   the bank destination and puts it in the admin payout queue — closing the
+//   investment here instead left matured money with no destination and no way
+//   for the user to ask for it.
+//   Matches maturity_date = CURDATE() so each investment is announced once;
+//   re-running the job on the same day only repeats the notification.
 const matureInvestments = async () => {
   try {
     console.log('[cron] Running investment maturity job...');
     const { sendNotification } = require('./fcm');
 
     const [dueInvestments] = await pool.query(
-      `SELECT id FROM investments WHERE status = 'active' AND maturity_date <= CURDATE()`
+      `SELECT i.id, i.user_id, i.principal_amount, i.maturity_amount, u.fcm_token
+         FROM investments i
+         JOIN users u ON u.id = i.user_id
+        WHERE i.status = 'active' AND i.maturity_date = CURDATE()`
     );
 
-    let maturedCount = 0;
-    for (const { id } of dueInvestments) {
-      const conn = await pool.getConnection();
+    let notifiedCount = 0;
+    for (const inv of dueInvestments) {
       try {
-        await conn.beginTransaction();
-
-        const [[investment]] = await conn.query(
-          "SELECT * FROM investments WHERE id = ? AND status = 'active' FOR UPDATE",
-          [id]
-        );
-        if (!investment) { await conn.rollback(); conn.release(); continue; }
-
-        const [updateResult] = await conn.query(
-          "UPDATE investments SET status = 'matured', matured_at = NOW() WHERE id = ? AND status = 'active'",
-          [id]
-        );
-        if (updateResult.affectedRows !== 1) { await conn.rollback(); conn.release(); continue; }
-
-        const payoutAmount = parseFloat(investment.maturity_amount);
-
-        await conn.query('UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?', [payoutAmount, investment.user_id]);
-
-        const [txnResult] = await conn.query(
-          `INSERT INTO transactions (user_id, investment_id, amount, type, status, description)
-           VALUES (?, ?, ?, 'investment_payout', 'success', ?)`,
-          [investment.user_id, investment.id, payoutAmount, `Maturity payout for investment #${investment.id}`]
-        );
-
-        await conn.query('UPDATE investments SET payout_transaction_id = ? WHERE id = ?', [txnResult.insertId, investment.id]);
-
-        const msg = `Your investment of ${formatINR(investment.principal_amount)} has matured. ${formatINR(payoutAmount)} has been credited to your wallet.`;
-        await conn.query(
+        const msg = `Your investment of ${formatINR(inv.principal_amount)} has matured. ${formatINR(inv.maturity_amount)} is ready — open Investments to withdraw it to your bank account.`;
+        await pool.query(
           'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-          [investment.user_id, '💰 Investment Matured', msg, 'payment']
+          [inv.user_id, '💰 Investment Matured', msg, 'payment']
         );
+        notifiedCount++;
 
-        await conn.commit();
-        maturedCount++;
-
-        const [[user]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [investment.user_id]);
-        if (user?.fcm_token) {
-          sendNotification(user.fcm_token, '💰 Investment Matured', msg, { screen: 'Investments' }).catch(() => {});
+        if (inv.fcm_token) {
+          sendNotification(inv.fcm_token, '💰 Investment Matured', msg, { screen: 'Investment' }).catch(() => {});
         }
       } catch (err) {
-        try { await conn.rollback(); } catch (_) {}
-        console.error(`[cron][investment-maturity] Failed for investment #${id}:`, err.message);
-      } finally {
-        conn.release();
+        console.error(`[cron][investment-maturity] Failed for investment #${inv.id}:`, err.message);
       }
     }
 
-    console.log(`[cron] Investment maturity job complete — ${maturedCount} investment(s) matured`);
+    console.log(`[cron] Investment maturity job complete — ${notifiedCount} investment(s) notified`);
   } catch (err) {
     console.error('[cron][investment-maturity]', err.message);
   }
@@ -426,8 +268,13 @@ const registerJobs = () => {
   // Audit log cleanup — every Sunday at 02:00
   cron.schedule('0 2 * * 0', cleanOldAuditLogs, { timezone: 'Asia/Kolkata' });
 
-  // Auto-debit processing — every day at 09:30
-  cron.schedule('30 9 * * *', processAutoDebits, { timezone: 'Asia/Kolkata' });
+  // Auto-debit: raise tomorrow's EMIs — 09:30, 14:30 and 19:30 (all before
+  // the 21:00 cut-off for presenting a debit the next day)
+  cron.schedule('30 9,14,19 * * *', processAutoDebits, { timezone: 'Asia/Kolkata' });
+
+  // Auto-debit: check on debits still awaiting the bank's answer, and on
+  // mandates still awaiting the bank's approval — every 3 hours
+  cron.schedule('10 */3 * * *', reconcilePendingAutoDebits, { timezone: 'Asia/Kolkata' });
 
   console.log('✅ Scheduled jobs registered: penalty, investment maturity, EMI reminders, audit cleanup, auto-debit');
 };

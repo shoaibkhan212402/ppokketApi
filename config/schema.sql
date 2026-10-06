@@ -262,16 +262,24 @@ CREATE TABLE IF NOT EXISTS contact_messages (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- DEFAULT ADMIN SEED
-INSERT IGNORE INTO admins (name, email, password, role)
-VALUES ('Super Admin', 'admin@ppokket.com', '$2b$10$yQGnMfomJsbW9fvWFhH/zO.s/I.YUx2ujz9tXTOjvgJd9laGbAZTu', 'super_admin');
--- Default password: Admin@123
+-- No admin account is seeded. A schema file is public to everyone with the
+-- code, so a password written here is no password at all (the old seed,
+-- admin@ppokket.com / Admin@123, is now refused at login for that reason).
+-- Create the first super admin with:
+--   node scripts/create_superadmin.js <email> <password> [name]
 
 -- Deferred FK: users.assigned_partner_id → admins(id) (defined here because admins table comes after users)
 ALTER TABLE users ADD CONSTRAINT fk_users_assigned_partner
   FOREIGN KEY (assigned_partner_id) REFERENCES admins(id) ON DELETE SET NULL;
 
 -- BANK MANDATES TABLE (for auto-pay e-mandate)
+-- One row per customer: their Cashfree subscription (see utils/autoPay.js).
+--   subscription_id  the id we give Cashfree; every API call and webhook uses it
+--   mandate_id       Cashfree's own id for it (cf_subscription_id)
+--   umrn             the bank's mandate reference (UMRN for eNACH, UMN for UPI)
+--   payment_mode     'enach' | 'upi' once authorised; 'mock' = simulated in development
+--   status           'inactive' = authorised but parked because the loan closed;
+--                    the customer can reuse it for their next loan
 CREATE TABLE IF NOT EXISTS bank_mandates (
   id               INT AUTO_INCREMENT PRIMARY KEY,
   user_id          INT NOT NULL UNIQUE,
@@ -280,7 +288,7 @@ CREATE TABLE IF NOT EXISTS bank_mandates (
   mandate_id       VARCHAR(100) DEFAULT NULL,
   sub_reference_id VARCHAR(100) DEFAULT NULL,
   umrn             VARCHAR(100) DEFAULT NULL,
-  status           ENUM('pending', 'active', 'failed', 'cancelled') DEFAULT 'pending',
+  status           ENUM('pending', 'active', 'failed', 'cancelled', 'inactive') DEFAULT 'pending',
   auth_link        TEXT DEFAULT NULL,
   payment_mode     VARCHAR(50) DEFAULT NULL,
   created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -358,7 +366,10 @@ INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES
   ('investment_min_amount',         '5000'),
   ('investment_max_amount',         ''),
   ('investment_min_tenure_months',  '1'),
-  ('investment_max_tenure_months',  '12');
+  ('investment_max_tenure_months',  '12'),
+  -- Which gateway collects one-time payments: 'cashfree' | 'razorpay'.
+  -- Switched from Admin → Settings → Payment Gateway (missing row = cashfree).
+  ('payment_gateway',               'cashfree');
 
 -- INVESTMENTS TABLE (fixed-return: user picks amount + tenure (months) freely;
 -- interest_rate is a snapshot of the admin-configured investment_monthly_rate
@@ -367,7 +378,7 @@ INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES
 --
 -- Withdrawal is two-step, mirroring how loan disbursement already works in this
 -- codebase (adminController.js disburseLoan): the user requests a withdrawal
--- and gives a payout destination (bank or UPI); the investment moves to
+-- (paid to their KYC-verified bank account only); the investment moves to
 -- 'withdrawal_requested' and the payout amount/type is locked in at that
 -- moment (pending_payout_amount / is_early_withdrawal) so admin timing can't
 -- change what the user is owed. An admin then manually sends the money

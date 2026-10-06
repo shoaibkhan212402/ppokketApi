@@ -11,7 +11,7 @@
 -- (rate/100) * tenure_months.
 --
 -- Withdrawal is two-step (mirrors loan disbursement): user requests a
--- withdrawal with a payout destination (bank or UPI) -> status
+-- withdrawal (paid to their KYC-verified bank account only) -> status
 -- 'withdrawal_requested', payout amount/type locked in immediately
 -- (principal-only if before maturity_date, full maturity_amount if on/after
 -- it). Admin manually sends the money and marks it complete, which is when

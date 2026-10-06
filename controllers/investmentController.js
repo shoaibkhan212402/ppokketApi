@@ -23,6 +23,23 @@ const getSettings = async () => {
   };
 };
 
+// An investment the user can still ask to be paid out. Besides 'active', this
+// covers rows the old maturity cron marked 'matured' without ever capturing a
+// payout destination (payout_method IS NULL) — that money was never sent.
+const WITHDRAWABLE_SQL = "(status = 'active' OR (status = 'matured' AND payout_method IS NULL))";
+const isWithdrawable = (inv) => inv.status === 'active' || (inv.status === 'matured' && !inv.payout_method);
+
+// What the investment is worth to the user right now. Once a payout amount is
+// locked in (withdrawal requested / paid) that is the value — the accrual
+// formula would keep showing interest an early withdrawal forfeited.
+const displayValue = (inv) => {
+  if (inv.pending_payout_amount != null) return parseFloat(inv.pending_payout_amount);
+  if (inv.status === 'matured') return parseFloat(inv.maturity_amount);
+  return calculateCurrentValue(inv);
+};
+
+const maskAccount = (accountNumber) => `••••${String(accountNumber || '').slice(-4)}`;
+
 // ─────────────────────────────────────────────
 // USER-FACING
 // ─────────────────────────────────────────────
@@ -95,6 +112,30 @@ const createInvestment = async (req, res) => {
 
     const maturityAmount = calculateMaturityAmount(principal, settings.monthly_rate, tenureMonths);
 
+    // Re-use an identical unfunded attempt instead of stacking a new 'pending'
+    // row every time checkout is abandoned and the user taps Invest again.
+    const [existing] = await pool.query(
+      `SELECT id FROM investments
+        WHERE user_id = ? AND status = 'pending'
+          AND principal_amount = ? AND tenure_months = ? AND interest_rate = ?
+        ORDER BY id DESC LIMIT 1`,
+      [userId, principal, tenureMonths, settings.monthly_rate]
+    );
+    if (existing.length) {
+      return res.json({
+        success: true,
+        message: 'Investment created — proceed to funding',
+        investment: {
+          id: existing[0].id,
+          principal_amount: principal,
+          interest_rate: settings.monthly_rate,
+          tenure_months: tenureMonths,
+          maturity_amount: maturityAmount,
+          status: 'pending',
+        },
+      });
+    }
+
     const [result] = await pool.query(
       `INSERT INTO investments (user_id, principal_amount, interest_rate, tenure_months, maturity_amount, status)
        VALUES (?, ?, ?, ?, ?, 'pending')`,
@@ -141,36 +182,37 @@ const cancelInvestment = async (req, res) => {
 };
 
 // POST /api/investment/withdraw/:id
-// Early-withdrawal rule: if the lock-in period (tenure) has already fully
-// elapsed, the user gets the full locked-in maturity_amount (same as the
-// nightly maturity cron). If withdrawn before the lock-in period ends, the
-// user gets principal_amount only — interest is forfeited.
+// Payout rule: once the lock-in period (tenure) has fully elapsed the user
+// gets the locked-in maturity_amount; withdrawn before that, principal_amount
+// only — interest is forfeited.
+// Destination rule: the money only ever goes to the user's KYC-verified bank
+// account (bank_details.is_verified), the same account loan disbursals use.
+// Any account / UPI ID in the request body is ignored — accepting one let a
+// freshly funded investment be cashed out to an arbitrary third party.
 const withdrawInvestment = async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const userId = req.user.id;
     const { id } = req.params;
-    const { payout_method, account_holder_name, account_number, ifsc_code, upi_id } = req.body;
 
-    if (payout_method === 'bank') {
-      if (!account_holder_name || !account_number || !ifsc_code) {
-        await conn.rollback();
-        return res.status(400).json({ success: false, message: 'Account holder name, account number and IFSC code are required' });
-      }
-    } else if (payout_method === 'upi') {
-      if (!upi_id) {
-        await conn.rollback();
-        return res.status(400).json({ success: false, message: 'UPI ID is required' });
-      }
-    } else {
-      return res.status(400).json({ success: false, message: 'payout_method must be "bank" or "upi"' });
+    const [[bank]] = await conn.query(
+      'SELECT account_holder, account_number, ifsc_code, bank_name FROM bank_details WHERE user_id = ? AND is_verified = 1',
+      [userId]
+    );
+    if (!bank || !bank.account_number || !bank.ifsc_code) {
+      return res.status(400).json({
+        success: false,
+        code: 'NO_VERIFIED_BANK',
+        message: 'No verified bank account found on your profile. Please complete bank verification in KYC or contact support.',
+      });
     }
+    const destination = `${bank.bank_name || 'bank account'} ${maskAccount(bank.account_number)}`;
 
     await conn.beginTransaction();
 
     const [[investment]] = await conn.query(
       `SELECT *, (maturity_date <= CURDATE()) AS is_matured
-         FROM investments WHERE id = ? AND user_id = ? AND status = 'active' FOR UPDATE`,
+         FROM investments WHERE id = ? AND user_id = ? AND ${WITHDRAWABLE_SQL} FOR UPDATE`,
       [id, userId]
     );
     if (!investment) {
@@ -178,42 +220,33 @@ const withdrawInvestment = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Active investment not found' });
     }
 
-    const isMatured = !!investment.is_matured;
+    const isMatured = investment.status === 'matured' || !!investment.is_matured;
     const payoutAmount = isMatured ? parseFloat(investment.maturity_amount) : parseFloat(investment.principal_amount);
 
     const [updateResult] = await conn.query(
       `UPDATE investments SET
          status = 'withdrawal_requested',
-         payout_method = ?,
+         payout_method = 'bank',
          payout_account_holder = ?,
          payout_account_number = ?,
          payout_ifsc = ?,
-         payout_upi_id = ?,
+         payout_upi_id = NULL,
          pending_payout_amount = ?,
          is_early_withdrawal = ?,
          withdrawal_requested_at = NOW()
-       WHERE id = ? AND status = 'active'`,
-      [
-        payout_method,
-        payout_method === 'bank' ? account_holder_name : null,
-        payout_method === 'bank' ? account_number : null,
-        payout_method === 'bank' ? ifsc_code : null,
-        payout_method === 'upi' ? upi_id : null,
-        payoutAmount,
-        isMatured ? 0 : 1,
-        id,
-      ]
+       WHERE id = ? AND status = ?`,
+      [bank.account_holder, bank.account_number, bank.ifsc_code, payoutAmount, isMatured ? 0 : 1, id, investment.status]
     );
     if (updateResult.affectedRows !== 1) {
-      // Lost a race with the maturity cron (or a duplicate request) — the
-      // investment was already closed out by the other request.
+      // Lost a race with a duplicate request — the investment was already
+      // moved on by the other one.
       await conn.rollback();
       return res.status(409).json({ success: false, message: 'Investment status changed — please refresh and try again' });
     }
 
     const notifMsg = isMatured
-      ? `Your withdrawal of ₹${payoutAmount} (full maturity amount) has been received and is being processed. Funds will reach your account within 24–48 hours.`
-      : `Your withdrawal of ₹${payoutAmount} (principal only — lock-in period not complete, interest forfeited) has been received and is being processed. Funds will reach your account within 24–48 hours.`;
+      ? `Your withdrawal of ₹${payoutAmount} (full maturity amount) has been received and is being processed. Funds will reach your ${destination} account within 24–48 hours.`
+      : `Your withdrawal of ₹${payoutAmount} (principal only — lock-in period not complete, interest forfeited) has been received and is being processed. Funds will reach your ${destination} account within 24–48 hours.`;
     await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [userId, '⏳ Withdrawal Processing', notifMsg, 'payment']
@@ -221,16 +254,18 @@ const withdrawInvestment = async (req, res) => {
 
     await conn.commit();
 
+    await invalidateUserCache(userId).catch(() => {});
     const [[user]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [userId]);
     if (user?.fcm_token) {
-      sendNotification(user.fcm_token, '⏳ Withdrawal Processing', notifMsg, { screen: 'Investments' }).catch(() => {});
+      sendNotification(user.fcm_token, '⏳ Withdrawal Processing', notifMsg, { screen: 'Investment' }).catch(() => {});
     }
 
     res.json({
       success: true,
-      message: 'Withdrawal request received — funds will be sent to your account within 24–48 hours.',
+      message: `Withdrawal request received — ₹${payoutAmount} will be sent to your verified bank account (${destination}) within 24–48 hours.`,
       matured: isMatured,
       amount_pending: payoutAmount,
+      payout_destination: destination,
     });
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
@@ -241,16 +276,25 @@ const withdrawInvestment = async (req, res) => {
   }
 };
 
+// Shape sent to the investor: adds the flags the app / website branch on, so
+// the "has it matured / can it be withdrawn" rules live in one place.
+const forInvestor = (inv) => ({
+  ...inv,
+  is_matured: !!inv.is_matured,
+  can_withdraw: isWithdrawable(inv),
+  current_value: displayValue(inv),
+});
+const INVESTOR_COLUMNS = '*, (maturity_date IS NOT NULL AND maturity_date <= CURDATE()) AS is_matured';
+
 // GET /api/investment/my-investments
 const getMyInvestments = async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT * FROM investments WHERE user_id = ? ORDER BY created_at DESC',
+      `SELECT ${INVESTOR_COLUMNS} FROM investments WHERE user_id = ? ORDER BY created_at DESC`,
       [req.user.id]
     );
 
-    const investments = rows.map(inv => ({ ...inv, current_value: calculateCurrentValue(inv) }));
-    res.json({ success: true, investments });
+    res.json({ success: true, investments: rows.map(forInvestor) });
   } catch (err) {
     console.error('[getMyInvestments]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -261,7 +305,7 @@ const getMyInvestments = async (req, res) => {
 const getInvestmentDetails = async (req, res) => {
   try {
     const [rows] = await pool.query(
-      'SELECT * FROM investments WHERE id = ? AND user_id = ?',
+      `SELECT ${INVESTOR_COLUMNS} FROM investments WHERE id = ? AND user_id = ?`,
       [req.params.id, req.user.id]
     );
     if (!rows.length) return res.status(404).json({ success: false, message: 'Investment not found' });
@@ -273,7 +317,7 @@ const getInvestmentDetails = async (req, res) => {
 
     res.json({
       success: true,
-      investment: { ...rows[0], current_value: calculateCurrentValue(rows[0]) },
+      investment: forInvestor(rows[0]),
       transactions,
     });
   } catch (err) {
@@ -287,20 +331,24 @@ const getPortfolioSummary = async (req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM investments WHERE user_id = ?', [req.user.id]);
 
-    const active = rows.filter(r => r.status === 'active');
-    const matured = rows.filter(r => r.status === 'matured');
-    const totalInvested = active.reduce((s, r) => s + parseFloat(r.principal_amount), 0);
-    const currentValue = active.reduce((s, r) => s + calculateCurrentValue(r), 0);
-    const totalMaturedPayout = matured.reduce((s, r) => s + parseFloat(r.maturity_amount), 0);
+    // "Held" is money still with us: earning, matured but not yet withdrawn,
+    // or waiting on a payout the user asked for. Only investments that had a
+    // payout actually sent count as paid out.
+    const held = rows.filter(r => isWithdrawable(r) || r.status === 'withdrawal_requested');
+    const paidOut = rows.filter(r => ['matured', 'withdrawn'].includes(r.status) && !isWithdrawable(r));
+    const maturedPaid = paidOut.filter(r => r.status === 'matured');
+    const payout = (r) => parseFloat(r.pending_payout_amount ?? r.maturity_amount);
+    const sum = (list, pick) => Math.round(list.reduce((s, r) => s + pick(r), 0) * 100) / 100;
 
     res.json({
       success: true,
       summary: {
-        active_count: active.length,
-        matured_count: matured.length,
-        total_invested: Math.round(totalInvested * 100) / 100,
-        current_value: Math.round(currentValue * 100) / 100,
-        total_matured_payout: Math.round(totalMaturedPayout * 100) / 100,
+        active_count: held.length,
+        matured_count: maturedPaid.length,
+        total_invested: sum(held, r => parseFloat(r.principal_amount)),
+        current_value: sum(held, displayValue),
+        total_matured_payout: sum(maturedPaid, payout),
+        total_paid_out: sum(paidOut, payout), // matured payouts + early withdrawals
       },
     });
   } catch (err) {
@@ -345,7 +393,7 @@ const adminGetAllInvestments = async (req, res) => {
       params
     );
 
-    const withCurrentValue = investments.map(inv => ({ ...inv, current_value: calculateCurrentValue(inv) }));
+    const withCurrentValue = investments.map(inv => ({ ...inv, current_value: displayValue(inv) }));
 
     res.json({ success: true, investments: withCurrentValue, total });
   } catch (err) {
@@ -373,7 +421,7 @@ const adminGetInvestmentDetail = async (req, res) => {
 
     res.json({
       success: true,
-      investment: { ...rows[0], current_value: calculateCurrentValue(rows[0]) },
+      investment: { ...rows[0], current_value: displayValue(rows[0]) },
       transactions,
     });
   } catch (err) {
@@ -383,7 +431,7 @@ const adminGetInvestmentDetail = async (req, res) => {
 };
 
 // POST /api/admin/investments/:id/complete-withdrawal
-// Admin has manually sent the money to the user's bank/UPI (outside the app,
+// Admin has manually sent the money to the user's bank account (outside the app,
 // same real-world step as loan disbursement) and confirms it here. This is
 // the point wallet_balance actually gets credited — mirrors
 // adminController.js's disburseLoan, which credits wallet_balance as the
@@ -426,14 +474,21 @@ const adminCompleteWithdrawal = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Withdrawal request status changed — please refresh and try again' });
     }
 
-    await conn.query('UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?', [payoutAmount, investment.user_id]);
+    if (investment.payout_transaction_id) {
+      // Closed by the old maturity cron, which already credited wallet_balance
+      // and wrote the payout transaction before any money was sent. Record
+      // where it actually went instead of counting the payout a second time.
+      await conn.query('UPDATE transactions SET description = ? WHERE id = ?', [description, investment.payout_transaction_id]);
+    } else {
+      await conn.query('UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?', [payoutAmount, investment.user_id]);
 
-    const [txnResult] = await conn.query(
-      `INSERT INTO transactions (user_id, investment_id, amount, type, status, description)
-       VALUES (?, ?, ?, ?, 'success', ?)`,
-      [investment.user_id, investment.id, payoutAmount, txnType, description]
-    );
-    await conn.query('UPDATE investments SET payout_transaction_id = ? WHERE id = ?', [txnResult.insertId, investment.id]);
+      const [txnResult] = await conn.query(
+        `INSERT INTO transactions (user_id, investment_id, amount, type, status, description)
+         VALUES (?, ?, ?, ?, 'success', ?)`,
+        [investment.user_id, investment.id, payoutAmount, txnType, description]
+      );
+      await conn.query('UPDATE investments SET payout_transaction_id = ? WHERE id = ?', [txnResult.insertId, investment.id]);
+    }
 
     const notifMsg = `₹${payoutAmount} has been sent to your ${destination}.`;
     await conn.query(
@@ -446,7 +501,7 @@ const adminCompleteWithdrawal = async (req, res) => {
     await invalidateUserCache(investment.user_id).catch(() => {});
     const [[user]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [investment.user_id]);
     if (user?.fcm_token) {
-      sendNotification(user.fcm_token, '✅ Withdrawal Complete', notifMsg, { screen: 'Investments' }).catch(() => {});
+      sendNotification(user.fcm_token, '✅ Withdrawal Complete', notifMsg, { screen: 'Investment' }).catch(() => {});
     }
 
     res.json({ success: true, message: 'Withdrawal marked as sent', amount: payoutAmount, utr: mockUTR });

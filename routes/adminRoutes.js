@@ -40,6 +40,7 @@ const {
 const { adminGetReferrals, adminCreditReferral } = require('../controllers/referralController');
 const { getContactMessages, toggleContactMessageRead } = require('../controllers/contactController');
 const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal } = require('../controllers/investmentController');
+const { getGatewayConfig, setGateway } = require('../controllers/paymentController');
 
 router.use(adminProtect); // All admin routes protected
 
@@ -99,6 +100,9 @@ router.post('/referrals/:id/credit', requirePermission('manage_referrals'), admi
 
 // Investment management (super_admin only) — rate/min/max are plain
 // system_settings keys, edited via the existing /system-settings endpoints
+router.get('/payment-gateway', requireSuperAdmin, getGatewayConfig);
+router.put('/payment-gateway', requireSuperAdmin, setGateway);
+
 router.get('/investments', requireSuperAdmin, adminGetAllInvestments);
 router.get('/investments/:id', requireSuperAdmin, adminGetInvestmentDetail);
 router.post('/investments/:id/complete-withdrawal', requireSuperAdmin, adminCompleteWithdrawal);
