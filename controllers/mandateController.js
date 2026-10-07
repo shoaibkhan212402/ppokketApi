@@ -24,7 +24,13 @@ const {
 
 const frontendUrl = (req) => req?.headers?.origin || process.env.FRONTEND_URL || 'https://ppokket.com';
 // Public base URL of this API, for the link Cashfree sends the browser back to.
-const apiUrl = (req) => process.env.API_PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+// Cashfree's live API only accepts an https address there. Behind the host's
+// proxy a request can look like plain http even though the API is only ever
+// served over https, so with live keys the address is always given as https.
+const apiUrl = (req) => {
+  const base = process.env.API_PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  return process.env.CASHFREE_ENV === 'production' ? base.replace(/^http:\/\//i, 'https://') : base;
+};
 
 const SETUP_AGAIN = 'Your previous Auto-Pay setup can no longer be used. Please set up Auto-Pay again.';
 const GATEWAY_DOWN = 'Could not reach the bank gateway. Please try again in a few minutes.';
@@ -165,9 +171,19 @@ const createMandate = async (req, res) => {
       }
     } catch (err) {
       console.error('[createMandate] Cashfree Subscription Error:', err.response?.data || err.message);
-      return res.status(err.response ? 400 : 502).json({
+      if (!err.response) {
+        return res.status(502).json({ success: false, message: GATEWAY_DOWN });
+      }
+      // Cashfree's own reason is passed on: a refusal here is something to act
+      // on (a detail on the profile to correct, or Auto-Pay not yet enabled on
+      // the Cashfree account), and "please try again" alone would hide which.
+      const reason = String(err.response.data?.message || '').replace(/\s+/g, ' ').trim();
+      return res.status(400).json({
         success: false,
-        message: err.response ? 'Could not start Auto-Pay setup with the bank gateway. Please try again.' : GATEWAY_DOWN
+        message: reason
+          ? `Could not start Auto-Pay setup with the bank gateway: ${reason}`
+          : 'Could not start Auto-Pay setup with the bank gateway. Please try again.',
+        gateway_code: cashfreeErrorCode(err) || undefined,
       });
     }
 

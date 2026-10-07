@@ -211,11 +211,12 @@ const reconcilePendingAutoDebits = async () => {
 
 // ── JOB 5: Tell users their fixed-return investment has matured (runs at 00:15 every day) ──
 //   Maturity does not close the investment or credit anything by itself: the
-//   investment stays 'active' and the user asks for the payout from the app /
-//   website (POST /api/investment/withdraw/:id). That request is what captures
-//   the bank destination and puts it in the admin payout queue — closing the
-//   investment here instead left matured money with no destination and no way
-//   for the user to ask for it.
+//   investment stays 'active' and the user chooses, from the app / website,
+//   between reinvesting it (POST /api/investment/reinvest/:id) and withdrawing
+//   it (POST /api/investment/withdraw/:id). A withdrawal request is what
+//   captures the bank destination and puts it in the admin approval queue —
+//   closing the investment here instead left matured money with no
+//   destination and no way for the user to ask for it.
 //   Matches maturity_date = CURDATE() so each investment is announced once;
 //   re-running the job on the same day only repeats the notification.
 const matureInvestments = async () => {
@@ -233,7 +234,7 @@ const matureInvestments = async () => {
     let notifiedCount = 0;
     for (const inv of dueInvestments) {
       try {
-        const msg = `Your investment of ${formatINR(inv.principal_amount)} has matured. ${formatINR(inv.maturity_amount)} is ready — open Investments to withdraw it to your bank account.`;
+        const msg = `Your investment of ${formatINR(inv.principal_amount)} has matured. ${formatINR(inv.maturity_amount)} is ready — open Investments to reinvest it or withdraw it to your bank account.`;
         await pool.query(
           'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
           [inv.user_id, '💰 Investment Matured', msg, 'payment']

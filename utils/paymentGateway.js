@@ -15,6 +15,11 @@ const TIMEOUT_MS = 15000;
 
 const usable = (v) => !!v && !v.includes('placeholder');
 
+// An amount as a gateway wants it: rupees with at most two decimals. Adding
+// DECIMAL values in floating point (an EMI plus its late penalty, say) can come
+// out as 2003.9699999999998, which Cashfree rejects as "Invalid amount entered".
+const toRupees = (amount) => Math.round(parseFloat(amount) * 100) / 100;
+
 // Keys present in the environment (not whether the gateway accepts them — see checkCredentials).
 const isConfigured = (gateway) => {
   if (gateway === 'cashfree') return usable(process.env.CASHFREE_APP_ID) && usable(process.env.CASHFREE_SECRET_KEY);
@@ -27,6 +32,13 @@ const gatewayMode = (gateway) => {
   if (gateway === 'razorpay') return (process.env.RAZORPAY_KEY_ID || '').startsWith('rzp_live_') ? 'live' : 'test';
   return null;
 };
+
+// A simulated ("mock") payment settles as paid with no money collected. That is
+// a development convenience for test data only: never in production, and never
+// on a server whose gateway has been switched to live keys — there a failed
+// order has to surface as an error, not quietly turn into a free "payment".
+const mockPaymentsAllowed = () => process.env.NODE_ENV !== 'production'
+  && !GATEWAYS.some((g) => isConfigured(g) && gatewayMode(g) === 'live');
 
 const describeGateway = (gateway) => ({
   id: gateway,
@@ -102,7 +114,7 @@ const cashfree = {
   async createOrder({ reference, amount, customer, returnUrl }) {
     const { data } = await axios.post(`${cashfreeBase()}/orders`, {
       order_id: `order_${reference}_${Date.now()}`,
-      order_amount: parseFloat(amount),
+      order_amount: toRupees(amount),
       order_currency: 'INR',
       customer_details: {
         customer_id: String(customer.id),
@@ -127,7 +139,7 @@ const cashfree = {
   // Returns the gateway's refund id.
   async refund({ orderId, amount, note }) {
     const { data } = await axios.post(`${cashfreeBase()}/orders/${orderId}/refunds`, {
-      refund_amount: parseFloat(amount),
+      refund_amount: toRupees(amount),
       refund_id: `ref_${orderId.replace('order_', '')}_${Date.now()}`,
       refund_note: note,
       refund_speed: 'STANDARD',
@@ -275,7 +287,7 @@ const cashfreeSubscriptions = {
       subscription_id: subscriptionId,
       payment_id: paymentId,
       payment_type: 'CHARGE',
-      payment_amount: parseFloat(amount),
+      payment_amount: toRupees(amount),
       // Only the date part counts. Midday IST is the same calendar day in UTC.
       payment_schedule_date: `${scheduleDate}T12:00:00+05:30`,
       payment_remarks: remarks,
@@ -309,7 +321,7 @@ const cashfreeSubscriptions = {
       subscription_id: subscriptionId,
       payment_id: paymentId,
       refund_id: `ref_${paymentId.replace('auto_', '')}_${Date.now()}`,
-      refund_amount: parseFloat(amount),
+      refund_amount: toRupees(amount),
       refund_note: note,
       ...(speed ? { refund_speed: speed } : {}),
     }, subscriptionConfig());
@@ -425,7 +437,7 @@ const clients = { cashfree, razorpay };
 
 module.exports = {
   GATEWAYS, GATEWAY_NAMES,
-  isConfigured, describeGateway, isAuthError,
+  isConfigured, describeGateway, isAuthError, gatewayMode, mockPaymentsAllowed, toRupees,
   getSelectedGateway, setSelectedGateway, pickGatewayForOrder, gatewayOfOrder,
   cashfree, razorpay, clients,
   cashfreeSubscriptions, cashfreeErrorCode, cashfreeErrorMessage, autoPayMode, autoPayMaxAmount,

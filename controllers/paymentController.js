@@ -5,7 +5,7 @@ const { invalidateUserCache } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const {
   GATEWAYS, GATEWAY_NAMES,
-  isConfigured, describeGateway, isAuthError,
+  isConfigured, describeGateway, isAuthError, gatewayMode, mockPaymentsAllowed, toRupees,
   getSelectedGateway, setSelectedGateway, pickGatewayForOrder, gatewayOfOrder,
   cashfree, razorpay, clients,
 } = require('../utils/paymentGateway');
@@ -84,7 +84,9 @@ const createOrder = async (req, res) => {
         }
         const emi = emiRows[0];
         const penalty = emi.penalty_waived ? 0 : parseFloat(emi.penalty_amount || 0);
-        amountVal = parseFloat(emi.emi_amount) + penalty;
+        // Rounded to paise: the float sum can be 2003.9699999999998, which the
+        // gateway rejects and which should never be what gets recorded.
+        amountVal = toRupees(parseFloat(emi.emi_amount) + penalty);
         descriptionText = `EMI #${emi.installment_no} payment for loan #${loan_id}` + (penalty > 0 ? ` (incl. ₹${penalty.toFixed(2)} penalty)` : '');
         paymentType = 'emi';
       }
@@ -107,13 +109,21 @@ const createOrder = async (req, res) => {
     }
 
     const isProduction = process.env.NODE_ENV === 'production';
+    // A simulated order is only ever acceptable on a development server with
+    // no live gateway keys (see mockPaymentsAllowed).
+    const mockAllowed = mockPaymentsAllowed();
     const gatewayReady = isConfigured(gateway);
-    if (isProduction && !gatewayReady) {
+    if (!gatewayReady && !mockAllowed) {
       return res.status(500).json({ success: false, message: 'Payment gateway is not configured. Please contact support.' });
     }
 
     const reference = refLoanId ? refLoanId : 'inv' + refInvestmentId;
     const returnTab = refInvestmentId ? 'Investments' : 'My+Loans';
+    // Cashfree's live API only accepts an https return address. A page served
+    // over plain http (a developer's localhost) is sent back to the live site.
+    const returnBase = gatewayMode(gateway) === 'live' && !/^https:\/\//i.test(frontendUrl(req))
+      ? (process.env.FRONTEND_URL || 'https://ppokket.com')
+      : frontendUrl(req);
     let orderId = null;
     let orderGateway = 'mock';
     let checkout = {};
@@ -134,19 +144,26 @@ const createOrder = async (req, res) => {
             reference,
             amount: amountVal,
             customer: { id: userId, email: user.email, phone, name: user.full_name },
-            returnUrl: `${frontendUrl(req)}/profile?tab=${returnTab}&order_id={order_id}`,
+            returnUrl: `${returnBase}/profile?tab=${returnTab}&order_id={order_id}`,
           });
         orderId = created.orderId;
         checkout = created.checkout;
         orderGateway = gateway;
       } catch (err) {
         console.error(`${GATEWAY_NAMES[gateway]} order creation failed:`, err.response?.data || err.message);
-        // Fail closed in production: a transient gateway error must never
-        // silently downgrade to a mock order that later auto-verifies as paid.
-        if (isProduction) {
-          return res.status(502).json({ success: false, message: 'Payment gateway is temporarily unavailable. Please try again shortly.' });
+        // Fail closed: a gateway error must never silently downgrade to a mock
+        // order that later auto-verifies as paid. Outside production the
+        // gateway's own reason is passed on, so a misconfiguration is visible.
+        if (!mockAllowed) {
+          const reason = err.response?.data?.message || err.response?.data?.error?.description || err.message;
+          return res.status(502).json({
+            success: false,
+            message: isProduction
+              ? 'Payment gateway is temporarily unavailable. Please try again shortly.'
+              : `${GATEWAY_NAMES[gateway]} could not start the payment: ${reason}`,
+          });
         }
-        console.warn('Falling back to mock order (non-production only).');
+        console.warn('Falling back to mock order (development with no live gateway keys only).');
       }
     }
 
@@ -384,10 +401,12 @@ const verifyPayment = async (req, res) => {
     let isPaid = false;
 
     if (gateway === 'mock') {
-      if (process.env.NODE_ENV === 'production') {
-        // Mock orders should never exist in production (createOrder refuses to
-        // mint them there), but never trust one as paid if it somehow shows up.
-        console.error(`[verifyPayment] Rejected mock order verification in production: ${orderId}`);
+      if (!mockPaymentsAllowed()) {
+        // Mock orders should never exist in production or alongside live
+        // gateway keys (createOrder refuses to mint them there), but never
+        // trust one as paid if it somehow shows up — e.g. one created before
+        // the server was switched to live keys.
+        console.error(`[verifyPayment] Rejected mock order verification (simulated payments are off on this server): ${orderId}`);
         return res.status(400).json({ success: false, message: 'Payment verification failed: Invalid order' });
       }
       isPaid = true;
@@ -496,8 +515,8 @@ const handleWebhook = async (req, res) => {
     if (!order || !payment || payment.payment_status !== 'SUCCESS') return;
 
     const orderId = order.order_id; // stored in transactions.razorpay_order_id — the column name predates Cashfree
-    if (gatewayOfOrder(orderId) === 'mock' && process.env.NODE_ENV === 'production') {
-      console.error(`[handleWebhook] Rejected mock order in production webhook: ${orderId}`);
+    if (gatewayOfOrder(orderId) === 'mock' && !mockPaymentsAllowed()) {
+      console.error(`[handleWebhook] Rejected mock order in webhook (simulated payments are off on this server): ${orderId}`);
       return;
     }
 
