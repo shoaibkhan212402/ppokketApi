@@ -1,3 +1,5 @@
+const { emiCharges } = require('./loanCharges');
+
 // Standard reducing-balance EMI formula
 const calculateEMI = (principal, monthlyRate, months) => {
   const r = monthlyRate / 100;
@@ -22,8 +24,11 @@ const calculateEMI = (principal, monthlyRate, months) => {
  * @param {object} loan     { amount, interest_rate, duration_months, emi_amount, processing_fee }
  * @param {string} firstEmiDate  YYYY-MM-DD or null
  * @param {object} settings system_settings row
+ * @param {Array}  charges  the loan's admin-defined charges (utils/loanCharges.js);
+ *                          the 'emi' ones are added to every instalment
  *
- * Returned rows: { installment_no, due_date, emi_amount, principal_amount, interest_amount, first_emi_charges, balance_after }
+ * Returned rows: { installment_no, due_date, emi_amount, principal_amount, interest_amount, first_emi_charges, emi_charges, emi_charge_items, balance_after }
+ * emi_amount is what the customer pays for that instalment, everything included.
  */
 const parseLocalDate = (dateStr) => {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -41,7 +46,18 @@ const addMonthsLocal = (baseDate, monthsToAdd) => {
   return new Date(baseDate.getFullYear(), baseDate.getMonth() + monthsToAdd, baseDate.getDate());
 };
 
-const generateEMISchedule = (loan, firstEmiDate = null, settings = {}) => {
+const generateEMISchedule = (loan, firstEmiDate = null, settings = {}, charges = []) => {
+  // Admin-defined per-EMI charges, priced on an instalment's principal + interest.
+  const withCharges = (row) => {
+    const extra = emiCharges(charges, row.principal_amount + row.interest_amount);
+    return {
+      ...row,
+      emi_amount: Math.round((row.emi_amount + extra.total) * 100) / 100,
+      emi_charges: extra.total,
+      emi_charge_items: extra.items,
+    };
+  };
+
   const principal   = parseFloat(loan.amount);
   const monthlyRate = parseFloat(loan.interest_rate) / 100;
   const months      = parseInt(loan.duration_months);
@@ -73,7 +89,7 @@ const generateEMISchedule = (loan, firstEmiDate = null, settings = {}) => {
     const firstEmiTotal  = Math.round((firstPrincipal + firstInterest + feeCharges) * 100) / 100;
     balance              = Math.round((balance - firstPrincipal) * 100) / 100;
 
-    schedule.push({
+    schedule.push(withCharges({
       installment_no:    1,
       due_date:          formatLocalDate(dueDate),
       emi_amount:        firstEmiTotal,
@@ -81,7 +97,7 @@ const generateEMISchedule = (loan, firstEmiDate = null, settings = {}) => {
       interest_amount:   firstInterest,
       first_emi_charges: feeCharges,
       balance_after:     balance,
-    });
+    }));
 
     // Remaining EMIs on reduced balance
     const remMonths = months - 1;
@@ -95,7 +111,7 @@ const generateEMISchedule = (loan, firstEmiDate = null, settings = {}) => {
       if (i === months) principal_i = remBal; // clear remaining on last
       remBal = Math.round((remBal - principal_i) * 100) / 100;
 
-      schedule.push({
+      schedule.push(withCharges({
         installment_no:    i,
         due_date:          formatLocalDate(next),
         emi_amount:        i === months ? Math.round((principal_i + interest) * 100) / 100 : remEMI,
@@ -103,7 +119,7 @@ const generateEMISchedule = (loan, firstEmiDate = null, settings = {}) => {
         interest_amount:   interest,
         first_emi_charges: 0,
         balance_after:     remBal < 0.01 ? 0 : remBal,
-      });
+      }));
     }
     return schedule;
   }
@@ -116,18 +132,18 @@ const generateEMISchedule = (loan, firstEmiDate = null, settings = {}) => {
     let   prin      = Math.round((emiAmt - interest) * 100) / 100;
     if (i === months) prin = balance;
     balance         = Math.round((balance - prin) * 100) / 100;
-    const charges   = i === 1 ? feeCharges : 0;
-    const totalAmt  = Math.round((emiAmt + charges) * 100) / 100;
+    const feeInThisEmi = i === 1 ? feeCharges : 0;
+    const totalAmt  = Math.round((emiAmt + feeInThisEmi) * 100) / 100;
 
-    schedule.push({
+    schedule.push(withCharges({
       installment_no:    i,
       due_date:          formatLocalDate(dueDate),
       emi_amount:        i === months ? Math.round((prin + interest) * 100) / 100 : totalAmt,
       principal_amount:  prin,
       interest_amount:   interest,
-      first_emi_charges: charges,
+      first_emi_charges: feeInThisEmi,
       balance_after:     balance < 0.01 ? 0 : balance,
-    });
+    }));
 
     dueDate = addMonthsLocal(dueDate, 1);
   }

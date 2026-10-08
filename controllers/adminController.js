@@ -5,6 +5,11 @@ const path = require('path');
 const { pool } = require('../config/db');
 const { sendNotification, sendMulticast } = require('../utils/fcm');
 const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
+const {
+  loadChargeContext, loadVersionsLocked, chargesAsOf, chargesForLoan, disbursalCharges, loanChargeSummary,
+  attachLoanCharges, attachEmiCharges,
+} = require('../utils/loanCharges');
+const { getEmployment, attachEmployment, withoutDocument } = require('../utils/employment');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { getUserCreditDetails } = require('./userController');
@@ -147,6 +152,10 @@ const getAllUsers = async (req, res) => {
     params.push(parseInt(limit), parseInt(offset));
 
     const [users] = await pool.query(query, params);
+    // Where each customer works (company, designation, experience, offer
+    // letter). Partners are told the offer letter exists, not given the file.
+    await attachEmployment(users);
+    if (isPartner) for (const user of users) user.employment = withoutDocument(user.employment);
 
     let countQuery = 'SELECT COUNT(*) as total FROM users WHERE (full_name LIKE ? OR mobile LIKE ? OR email LIKE ?)';
     const countParams = [searchParam, searchParam, searchParam];
@@ -220,6 +229,8 @@ const getLeadKycDetails = async (req, res) => {
       [userId]
     );
     if (!kyc) return res.status(404).json({ success: false, message: 'User not found' });
+    // Like the documents above: whether an offer letter was given, not the file
+    kyc.employment = withoutDocument(await getEmployment(userId));
     res.json({ success: true, kyc });
   } catch (err) {
     console.error('[getLeadKycDetails]', err);
@@ -235,7 +246,7 @@ const getAllLoans = async (req, res) => {
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
 
     let query = `
-      SELECT l.*, u.full_name, u.mobile, u.email,
+      SELECT l.*, UNIX_TIMESTAMP(l.approved_at) AS approved_ts, u.full_name, u.mobile, u.email,
              COALESCE(u.credit_score, u.experian_score) AS credit_score,
              u.occupation, u.monthly_income,
              (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
@@ -267,6 +278,11 @@ const getAllLoans = async (req, res) => {
     params.push(parseInt(limit), parseInt(offset));
 
     const [loans] = await pool.query(query, params);
+    // Extra charges each loan carries (Admin → Charges)
+    attachLoanCharges(loans, await loadChargeContext());
+    // Where the borrower works
+    await attachEmployment(loans, 'user_id');
+    if (isPartner) for (const loan of loans) loan.employment = withoutDocument(loan.employment);
     res.json({ success: true, loans });
   } catch (err) {
     console.error('[getAllLoans]', err);
@@ -307,11 +323,16 @@ const previewEMI = async (req, res) => {
       first_emi_principal_pct: first_emi_pct !== undefined ? parseFloat(first_emi_pct) : (parseFloat(sysSettings.first_emi_principal_pct) || 0),
     };
 
+    // The admin-defined charges a loan approved right now would carry
+    const chargeCtx = await loadChargeContext();
+    const loanCharges = chargesAsOf(chargeCtx.versions, chargeCtx.now);
+
     const emiAmt = calculateEMI(p, r, n);
     const schedule = generateEMISchedule(
       { amount: p, interest_rate: r, duration_months: n, emi_amount: emiAmt, processing_fee: procFee },
       first_emi_date || null,
-      mergedSettings
+      mergedSettings,
+      loanCharges
     );
 
     // Totals
@@ -339,6 +360,15 @@ const previewEMI = async (req, res) => {
       penalty_flat_per_day: sysSettings.penalty_flat_per_day || 50,
       penalty_max_pct_of_emi: sysSettings.penalty_max_pct_of_emi || 50,
       bounce_charge: sysSettings.bounce_charge || 500,
+      // Extra charges (Admin → Charges): what is deducted at disbursal, what is
+      // added to each EMI (already inside the schedule amounts), and what
+      // finally reaches the customer's bank account.
+      charges: loanChargeSummary(
+        { amount: p, processing_fee: procFee, processing_fee_in_first_emi: !!sysSettings.processing_fee_in_first_emi },
+        loanCharges,
+        sysSettings,
+        schedule
+      ),
       schedule,
     });
   } catch (err) {
@@ -396,13 +426,38 @@ const processLoan = async (req, res) => {
 
     const mergedSettings = { ...sysSettings, first_emi_principal_pct: resolvedFirstEmiPct };
 
+    // The loan carries the admin-defined charges (Admin → Charges) in force at
+    // the moment it is approved. That moment is stamped first and read back in
+    // the database's own clock, so everything that prices this loan later —
+    // disbursal, the agreement, the customer's screens — arrives at exactly
+    // the same charges (utils/loanCharges.js).
+    const chargeVersions = await loadVersionsLocked(conn);
+    await conn.query('UPDATE loans SET approved_at = NOW() WHERE id = ?', [loanId]);
+    const [[{ approved_ts }]] = await conn.query('SELECT UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ?', [loanId]);
+    const loanCharges = chargesAsOf(chargeVersions, Number(approved_ts));
+
     const finalEMI = calculateEMI(finalAmount, finalRate, finalMonths);
     const schedule = generateEMISchedule(
       { amount: finalAmount, interest_rate: finalRate, duration_months: finalMonths, emi_amount: finalEMI, processing_fee: finalProcFee },
       first_emi_date || null,
-      mergedSettings
+      mergedSettings,
+      loanCharges
     );
     const finalTotal = Math.round(schedule.reduce((s, r) => s + parseFloat(r.emi_amount), 0) * 100) / 100;
+
+    const chargeSummary = loanChargeSummary(
+      { amount: finalAmount, processing_fee: finalProcFee, processing_fee_in_first_emi: !!sysSettings.processing_fee_in_first_emi },
+      loanCharges,
+      sysSettings,
+      schedule
+    );
+    if (chargeSummary.net_disbursal <= 0) {
+      await conn.rollback(); conn.release();
+      return res.status(400).json({
+        success: false,
+        message: 'The processing fee and charges add up to the whole loan amount — nothing would be left to disburse. Check Settings and Charges.',
+      });
+    }
 
     // Update the loan with admin's final terms + configured penalty rate
     await conn.query(
@@ -419,7 +474,6 @@ const processLoan = async (req, res) => {
           penalty_rate    = ?,
           status          = 'approved',
           approved_by     = ?,
-          approved_at     = NOW(),
           next_emi_date   = ?
         WHERE id = ?`,
       [finalAmount, finalRate, finalMonths, finalEMI, finalProcFee, resolvedFeePct, resolvedFirstEmiPct, sysSettings.processing_fee_in_first_emi ? 1 : 0, finalTotal,
@@ -480,6 +534,7 @@ const processLoan = async (req, res) => {
       emi_amount: finalEMI,
       total_payable: finalTotal,
       processing_fee: finalProcFee,
+      charges: chargeSummary,
       schedule_count: schedule.length,
       first_emi_date: schedule[0]?.due_date,
     });
@@ -627,6 +682,8 @@ const getPendingKYC = async (req, res) => {
     query += ' ORDER BY k.created_at ASC';
 
     const [kycs] = await pool.query(query, params);
+    // Where each applicant works, with the offer letter if they gave one
+    await attachEmployment(kycs, 'user_id');
     res.json({ success: true, kycs });
   } catch (err) {
     console.error('[getPendingKYC]', err);
@@ -673,11 +730,15 @@ const reviewKYC = async (req, res) => {
         gst_on_processing_fee: sysSettings.gst_on_processing_fee,
       };
 
+      // Per-EMI charges set in Admin → Charges are part of what the customer will pay
+      const chargeCtx = await loadChargeContext();
+
       const emiAmt = calculateEMI(limitVal, rateVal, tenureVal);
       const schedule = generateEMISchedule(
         { amount: limitVal, interest_rate: rateVal, duration_months: tenureVal, emi_amount: emiAmt, processing_fee: procFee },
         null,   // default → 3rd of next month
-        mergedSettings
+        mergedSettings,
+        chargesAsOf(chargeCtx.versions, chargeCtx.now)
       );
 
       // first_emi_amount  = EMI #1 total (includes step-down principal + fee if applicable)
@@ -814,7 +875,7 @@ const disburseLoan = async (req, res) => {
 
     // Lock the loan row to prevent concurrent disbursals
     const [loanRows] = await conn.query(
-      "SELECT * FROM loans WHERE id = ? FOR UPDATE",
+      "SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ? FOR UPDATE",
       [loanId]
     );
     if (!loanRows.length) {
@@ -870,6 +931,17 @@ const disburseLoan = async (req, res) => {
       const totalDeduction = procFee + feeGst;
       payoutAmount = Math.max(0, payoutAmount - totalDeduction);
       feeDeductionMsg = ` (₹${totalDeduction} processing fee + ${gstPct}% GST deducted)`;
+    }
+
+    // Admin-defined charges taken at disbursal — the ones this loan was
+    // approved with, i.e. what the customer saw in the agreement.
+    const chargeCtx = await loadChargeContext(conn);
+    const disbursalExtras = disbursalCharges(chargesForLoan(chargeCtx, loan), loan.amount);
+    if (disbursalExtras.total > 0) {
+      payoutAmount = Math.max(0, Math.round((payoutAmount - disbursalExtras.total) * 100) / 100);
+      const itemised = ` (${disbursalExtras.items.map((c) => `₹${c.amount} ${c.name}`).join(', ')} deducted)`;
+      // transactions.description is VARCHAR(500): a long list is summarised
+      feeDeductionMsg += itemised.length <= 250 ? itemised : ` (₹${disbursalExtras.total} other charges deducted)`;
     }
 
     const mockUTR = 'PAYOUT' + crypto.randomBytes(6).toString('hex').toUpperCase();
@@ -943,7 +1015,13 @@ const getLoanEMISchedule = async (req, res) => {
     );
 
     if (schedule.length) {
-      return res.json({ success: true, emi_schedule: schedule });
+      // Each instalment also says how much of it is charges, and which ones
+      const [[loanRow]] = await pool.query(
+        'SELECT status, processing_fee_in_first_emi, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ?',
+        [loanId]
+      );
+      const rows = loanRow ? attachEmiCharges(schedule, loanRow, await loadChargeContext()) : schedule;
+      return res.json({ success: true, emi_schedule: rows });
     }
 
     // Dynamic generation if empty (pending loans)

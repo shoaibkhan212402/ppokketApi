@@ -9,6 +9,7 @@ require('dotenv').config();
 const { connectDB } = require('./config/db');
 const { connectRedis } = require('./config/redis');
 const { registerJobs } = require('./utils/scheduledJobs');
+const { applySchemaUpgrades } = require('./utils/schemaUpgrades');
 
 // Routes
 const authRoutes         = require('./routes/authRoutes');
@@ -151,6 +152,8 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(async () => {
+  // Adds any column / ENUM value this build needs — only when AUTO_SCHEMA_UPGRADE=true
+  await applySchemaUpgrades();
   await connectRedis();
   registerJobs();
   app.listen(PORT, () => {

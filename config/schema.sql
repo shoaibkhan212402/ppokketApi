@@ -388,9 +388,10 @@ INSERT IGNORE INTO system_settings (setting_key, setting_value) VALUES
 -- ('matured' or 'withdrawn').
 --
 -- Reaching maturity_date changes nothing by itself. The user then chooses:
--- withdraw (above), or reinvest — the maturity amount becomes the principal of
--- a new 'active' investment (whose reinvested_from_id points back here) and
--- this one is closed as 'reinvested'. No money moves and no admin step is needed.
+-- withdraw (above), or reinvest — the same row is renewed: the maturity amount
+-- becomes its principal and a new term starts that day at the current rate
+-- (the renewal is recorded as a transaction on the investment). No money moves
+-- and no admin step is needed.
 CREATE TABLE IF NOT EXISTS investments (
   id                     INT AUTO_INCREMENT PRIMARY KEY,
   user_id                INT NOT NULL,
@@ -400,7 +401,7 @@ CREATE TABLE IF NOT EXISTS investments (
   maturity_amount        DECIMAL(12,2) NOT NULL,
   start_date             DATE DEFAULT NULL,
   maturity_date          DATE DEFAULT NULL,
-  status                 ENUM('pending','active','withdrawal_requested','matured','cancelled','withdrawn','reinvested') DEFAULT 'pending',
+  status                 ENUM('pending','active','withdrawal_requested','matured','cancelled','withdrawn') DEFAULT 'pending',
   payout_method          ENUM('bank','upi') DEFAULT NULL,
   payout_account_holder  VARCHAR(150) DEFAULT NULL,
   payout_account_number  VARCHAR(50)  DEFAULT NULL,
@@ -411,7 +412,6 @@ CREATE TABLE IF NOT EXISTS investments (
   withdrawal_requested_at TIMESTAMP NULL,
   matured_at             TIMESTAMP NULL, -- set when status becomes 'matured' or 'withdrawn' (terminal)
   payout_transaction_id  INT DEFAULT NULL,
-  reinvested_from_id     INT DEFAULT NULL, -- the matured investment this one was rolled over from
   created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -424,6 +424,23 @@ CREATE TABLE IF NOT EXISTS investments (
 ALTER TABLE transactions ADD COLUMN investment_id INT DEFAULT NULL;
 ALTER TABLE transactions ADD CONSTRAINT fk_transactions_investment
   FOREIGN KEY (investment_id) REFERENCES investments(id) ON DELETE SET NULL;
+
+-- USER EMPLOYMENT (where a customer works: asked with the profile at
+-- onboarding, shown on their profile and to the admin; offer_letter is an
+-- optional uploaded document). The server creates this table by itself the
+-- first time a customer saves these details (utils/employment.js), so on an
+-- existing database it never has to be run by hand.
+CREATE TABLE IF NOT EXISTS user_employment (
+  user_id           INT NOT NULL PRIMARY KEY,
+  company_name      VARCHAR(150) DEFAULT NULL,   -- employer, or the customer's own business
+  designation       VARCHAR(100) DEFAULT NULL,
+  experience_years  DECIMAL(4,1) DEFAULT NULL,   -- total work experience
+  current_job_years DECIMAL(4,1) DEFAULT NULL,   -- time with the current employer
+  office_city       VARCHAR(100) DEFAULT NULL,
+  offer_letter      VARCHAR(500) DEFAULT NULL,
+  offer_letter_at   DATETIME DEFAULT NULL,
+  updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- INDEXES
 CREATE INDEX idx_users_mobile           ON users(mobile);
@@ -438,4 +455,3 @@ CREATE INDEX idx_emi_due_date           ON emi_schedule(due_date);
 CREATE INDEX idx_investments_user_id    ON investments(user_id);
 CREATE INDEX idx_investments_status     ON investments(status);
 CREATE INDEX idx_investments_maturity   ON investments(maturity_date);
-CREATE INDEX idx_investments_reinvested_from ON investments(reinvested_from_id);

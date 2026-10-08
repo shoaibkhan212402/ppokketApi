@@ -10,6 +10,7 @@ const {
   cashfree, razorpay, clients,
 } = require('../utils/paymentGateway');
 const { isAutoDebitOrder, cancelScheduledAutoDebits, refundAutoDebit } = require('../utils/autoPay');
+const { loadChargeContext, attachEmiCharges } = require('../utils/loanCharges');
 
 const frontendUrl = (req) => req?.headers?.origin || process.env.FRONTEND_URL || 'https://ppokket.com';
 // Public base URL of this API, for links a gateway sends the browser back to.
@@ -30,6 +31,7 @@ const createOrder = async (req, res) => {
     let paymentType;
     let refLoanId = null;
     let refInvestmentId = null;
+    let breakdown = null; // what an EMI payment is made of, for the client to show
 
     if (investment_id) {
       const [invRows] = await pool.query(
@@ -50,7 +52,7 @@ const createOrder = async (req, res) => {
     } else {
       // Verify loan belongs to user
       const [loanRows] = await pool.query(
-        'SELECT * FROM loans WHERE id = ? AND user_id = ?',
+        'SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ? AND user_id = ?',
         [loan_id, userId]
       );
       if (!loanRows.length) {
@@ -89,6 +91,27 @@ const createOrder = async (req, res) => {
         amountVal = toRupees(parseFloat(emi.emi_amount) + penalty);
         descriptionText = `EMI #${emi.installment_no} payment for loan #${loan_id}` + (penalty > 0 ? ` (incl. ₹${penalty.toFixed(2)} penalty)` : '');
         paymentType = 'emi';
+
+        // emi_amount already contains the instalment's charges (platform fee
+        // etc., see utils/loanCharges.js); this only spells them out for the
+        // record and the pay screen. It never changes what is charged, and a
+        // failure here must not stop a payment.
+        try {
+          const [priced] = attachEmiCharges([emi], loan, await loadChargeContext());
+          if (priced.charges_amount > 0) {
+            const note = ` (incl. ${priced.charge_items.map((c) => `₹${c.amount} ${c.name}`).join(', ')})`;
+            descriptionText += note.length <= 250 ? note : ` (incl. ₹${priced.charges_amount} charges)`;
+          }
+          breakdown = {
+            instalment: toRupees(parseFloat(emi.emi_amount) - priced.charges_amount),
+            charges: priced.charge_items,
+            charges_total: priced.charges_amount,
+            penalty: toRupees(penalty),
+            total: amountVal,
+          };
+        } catch (err) {
+          console.error('[createOrder] could not itemise EMI charges:', err.message);
+        }
       }
       refLoanId = loan_id;
     }
@@ -183,6 +206,7 @@ const createOrder = async (req, res) => {
       order_id: orderId,
       gateway: orderGateway, // 'cashfree' | 'razorpay' | 'mock' — tells the client which checkout to open
       amount: amountVal,
+      breakdown,
       currency: 'INR',
       is_mock: orderGateway === 'mock',
       // Cashfree checkout

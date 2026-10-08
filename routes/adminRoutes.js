@@ -39,7 +39,8 @@ const {
 } = require('../controllers/experianController');
 const { adminGetReferrals, adminCreditReferral } = require('../controllers/referralController');
 const { getContactMessages, toggleContactMessageRead } = require('../controllers/contactController');
-const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal } = require('../controllers/investmentController');
+const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal, adminRejectWithdrawal } = require('../controllers/investmentController');
+const { getLoanCharges, updateLoanCharges } = require('../controllers/chargesController');
 const { getGatewayConfig, setGateway } = require('../controllers/paymentController');
 
 router.use(adminProtect); // All admin routes protected
@@ -103,9 +104,14 @@ router.post('/referrals/:id/credit', requirePermission('manage_referrals'), admi
 router.get('/payment-gateway', requireSuperAdmin, getGatewayConfig);
 router.put('/payment-gateway', requireSuperAdmin, setGateway);
 
+// Extra loan charges — at disbursal or on every EMI (super_admin only)
+router.get('/loan-charges', requireSuperAdmin, getLoanCharges);
+router.put('/loan-charges', requireSuperAdmin, updateLoanCharges);
+
 router.get('/investments', requireSuperAdmin, adminGetAllInvestments);
 router.get('/investments/:id', requireSuperAdmin, adminGetInvestmentDetail);
 router.post('/investments/:id/complete-withdrawal', requireSuperAdmin, adminCompleteWithdrawal);
+router.post('/investments/:id/reject-withdrawal', requireSuperAdmin, adminRejectWithdrawal);
 
 router.get('/contact-messages', requirePermission('view_dashboard'), getContactMessages);
 router.patch('/contact-messages/:id/toggle-read', requirePermission('view_dashboard'), toggleContactMessageRead);

@@ -3,9 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const { pool } = require('../config/db');
 const { generateEMISchedule } = require('./loanUtils');
+const { loadChargeContext, chargesForLoan, disbursalCharges } = require('./loanCharges');
 
 // Helper to format currency
 const formatINR = (n) => `INR ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// For admin-typed text (charge names) placed into the HTML email
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
 // Helper to format date in ordinal format, e.g. 15th Jun, 2026
 const getOrdinalDate = (dateVal) => {
@@ -180,6 +184,17 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       settings[r.setting_key] = v === 'true' ? true : v === 'false' ? false : (!isNaN(v) && v !== '') ? Number(v) : v;
     }
 
+    // The extra charges (Admin → Charges) this loan was approved with: the
+    // ones deducted at disbursal and the ones added to every instalment.
+    const [[loanMeta]] = await pool.query(
+      'SELECT status, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ?',
+      [loan.id]
+    );
+    const loanCharges = chargesForLoan(await loadChargeContext(), { ...loan, ...loanMeta });
+    const disbursalExtras = disbursalCharges(loanCharges, loan.amount);
+    const emiExtras = loanCharges.filter((c) => c.applies_to === 'emi');
+    const emiExtraText = (c) => (c.type === 'percent' ? `${c.value}% of each instalment` : `${formatINR(c.value)} with each instalment`);
+
     // Generate dynamic schedule rows
     const scheduleRows = generateEMISchedule(
       {
@@ -190,17 +205,22 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
         processing_fee: loan.processing_fee
       },
       null,
-      settings
+      settings,
+      loanCharges
     );
 
     // Common variables
     const principal = parseFloat(loan.amount);
     const term = parseInt(loan.duration_months);
     const totalRepayable = scheduleRows.reduce((sum, r) => sum + parseFloat(r.emi_amount), 0);
-    const interestAmount = totalRepayable - principal;
+    // Per-instalment charges are part of what is repaid, but they are not interest
+    const emiChargesTotal = Math.round(scheduleRows.reduce((sum, r) => sum + r.emi_charges, 0) * 100) / 100;
+    const interestAmount = totalRepayable - principal - emiChargesTotal;
     const annualizedROI = (parseFloat(loan.interest_rate) * 12).toFixed(1);
     const effectiveROI = ((interestAmount / principal) * (12 / term) * 100).toFixed(2);
-    const netDisbursal = principal - parseFloat(loan.processing_fee || 0);
+    const netDisbursal = principal - parseFloat(loan.processing_fee || 0) - disbursalExtras.total;
+    const feesTotal = parseFloat(loan.processing_fee || 0) + disbursalExtras.total + emiChargesTotal;
+    // Every charge counts towards the APR: less reaches the borrower, more is repaid
     const apr = ((totalRepayable - netDisbursal) / netDisbursal * (12 / term) * 100).toFixed(1);
 
     const agreementDate = getOrdinalDate(loan.agreement_accepted_at || new Date());
@@ -264,7 +284,7 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
 
     const declarationText = `I the undersigned wish to apply to Ppokket Private Limited for a loan of ${formatINR(principal)} for ${term} Months at the Annualized Percentage Rate of Interest ${apr}%, Annualised Rate of Interest ${annualizedROI}% and Annualised Effective Rate of Interest ${effectiveROI}%.
 
-I agree and acknowledge that the lender is entitled to deduct processing fee of Rs. ${loan.processing_fee}, autopay setup charge of Rs ₹0 and autopay maintenance charge of Rs ₹0, which includes applicable taxes, from the Principal Amount. The lender is further entitled to charge penal Charges* on repayment post due date for each repayment instalment. In case of payment after due date, the Annualised Rate of Interest ${annualizedROI}% shall be charged till the actual date of payment.
+I agree and acknowledge that the lender is entitled to deduct processing fee of Rs. ${loan.processing_fee}, autopay setup charge of Rs ₹0 and autopay maintenance charge of Rs ₹0${disbursalExtras.items.map((c) => `, ${c.name} of Rs. ${c.amount}`).join('')}, which includes applicable taxes, from the Principal Amount.${emiExtras.length ? ` The lender is further entitled to collect, along with each repayment instalment, ${emiExtras.map((c) => `${c.name} (${emiExtraText(c)})`).join(', ')}, as included in the repayment schedule.` : ''} The lender is further entitled to charge penal Charges* on repayment post due date for each repayment instalment. In case of payment after due date, the Annualised Rate of Interest ${annualizedROI}% shall be charged till the actual date of payment.
 
 I hereby request the Lenders to debit Rs. 0/- only from Loan and pay insurer/ vendor towards insurance premium/ sale price of product / services.
 
@@ -391,7 +411,12 @@ I hereby further confirm that I understand English Language and agree that all t
       ['', '(a) Repayment Fee', '', '', 'Recurring', '0.1% of Repayment Amount'],
       ['', '(b) Repayment Convenience Charges', '', '', 'Recurring', 'As per PG charges'],
       ['', '(c) Autopay setup Charge', '', '', 'One-time', 'INR 0'],
-      ['', '(d) Autopay Maintenance Charge*', '', '', 'One-time', 'INR 0']
+      ['', '(d) Autopay Maintenance Charge*', '', '', 'One-time', 'INR 0'],
+      // Charges set in Admin → Charges, payable to the RE
+      ...[
+        ...disbursalExtras.items.map((c) => [c.name, 'One-time', formatINR(c.amount)]),
+        ...emiExtras.map((c) => [c.name, 'Recurring', emiExtraText(c)]),
+      ].map(([name, frequency, amount], i) => ['', `(${String.fromCharCode(101 + i)}) ${name}`, frequency, amount, '', ''])
     ];
 
     doc2.rect(50, y2, 512, 14).fill('#1e3a8a');
@@ -533,8 +558,8 @@ I hereby further confirm that I understand English Language and agree that all t
       ['3', 'Interest rate type (fixed or floating or hybrid) (Sl No. 6 of the KFS template - Part 1)', 'Fixed'],
       ['4', 'Rate of Interest (Sl No. 6 of the KFS template - Part 1)', `${annualizedROI}%`],
       ['5', 'Total Interest Amount to be charged during the entire tenor of the loan', formatINR(interestAmount)],
-      ['6', 'Fee/ Charges payable (in Rupees)', formatINR(loan.processing_fee)],
-      ['a.', 'Payable to the RE (Sl No.8A of the KFS template-Part 1)', formatINR(loan.processing_fee)],
+      ['6', 'Fee/ Charges payable (in Rupees)', formatINR(feesTotal)],
+      ['a.', 'Payable to the RE (Sl No.8A of the KFS template-Part 1)', formatINR(feesTotal)],
       ['b.', 'Payable to third-party routed through RE (Sl No.8B of the KFS template - Part 1)', 'INR 0.00'],
       ['7', 'Net disbursed amount (in Rupees)', formatINR(netDisbursal)],
       ['8', 'Discount Amount (INR)', 'INR 0.00'],
@@ -689,6 +714,8 @@ I hereby further confirm that I understand English Language and agree that all t
       ['Processing Fee + GST (INR)', formatINR(loan.processing_fee)],
       ['Insurance charges + GST (if applicable)', 'INR 0'],
       ['Other Product/Services + GST (if applicable)', 'INR 0'],
+      ...disbursalExtras.items.map((c) => [`${c.name} (deducted at disbursal)`, formatINR(c.amount)]),
+      ...emiExtras.map((c) => [`${c.name} (with every instalment)`, emiExtraText(c)]),
       ['Repayment Fee', '0.1% of Repayment Amount'],
       ['Foreclosure/Prepayment fee', 'If the borrower opts to foreclose/prepay any installment after the look-up period, a charge of 4.5% of the principal amount prepaid plus GST shall be charged. Foreclosure option is available from the 2nd installment onwards.'],
       ['Repayment Convenience Charges', 'As per payment gateway charges'],
@@ -1000,7 +1027,11 @@ I hereby further confirm that I understand English Language and agree that all t
             <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Annualized Effective Rate of Interest</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${effectiveROI}% Per Annum</td></tr>
             <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Interest Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(interestAmount)}</td></tr>
             <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Loan Term / Repayments</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${term} Months (${term} Installments)</td></tr>
-            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Processing Fee + GST</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(loan.processing_fee)}</td></tr>
+            <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Processing Fee + GST</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(loan.processing_fee)}</td></tr>${[
+              ...disbursalExtras.items.map((c) => [`${c.name} (deducted at disbursal)`, formatINR(c.amount)]),
+              ...emiExtras.map((c) => [`${c.name} (with every instalment)`, emiExtraText(c)]),
+            ].map(([label, value]) => `
+            <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">${escapeHtml(label)}</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${escapeHtml(value)}</td></tr>`).join('')}
             <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Net Disbursed Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(netDisbursal)}</td></tr>
             <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Total Repayable Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(totalRepayable)}</td></tr>
             <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Annualized Percentage Rate (APR) %</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${apr}% Per Annum</td></tr>

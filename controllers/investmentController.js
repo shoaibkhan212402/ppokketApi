@@ -3,6 +3,7 @@ const { pool } = require('../config/db');
 const { calculateMaturityAmount, calculateCurrentValue } = require('../utils/investmentUtils');
 const { sendNotification } = require('../utils/fcm');
 const { invalidateUserCache } = require('../config/redis');
+const { auditLog } = require('../utils/audit');
 
 // Reads the admin-configured investment settings from system_settings.
 // investment_max_amount === '' means "no cap".
@@ -34,18 +35,15 @@ const isWithdrawable = (inv) => inv.status === 'active' || (inv.status === 'matu
 // (reinvestInvestment). Needs the row's `is_matured` (see INVESTOR_COLUMNS).
 const isReinvestable = (inv) => isWithdrawable(inv) && (inv.status === 'matured' || !!inv.is_matured);
 
-// The reinvest feature needs investments.status = 'reinvested' and
-// investments.reinvested_from_id (config/migration_investment_reinvest.sql).
-const REINVEST_MIGRATION_HINT = 'run backend/config/migration_investment_reinvest.sql on the database';
-const isMissingReinvestSchema = (err) => err.reinvestSchemaMissing
-  || ['ER_BAD_FIELD_ERROR', 'WARN_DATA_TRUNCATED', 'ER_TRUNCATED_WRONG_VALUE_FOR_FIELD'].includes(err.code);
-
 // What the investment is worth to the user right now. Once a payout amount is
 // locked in (withdrawal requested / paid) that is the value — the accrual
 // formula would keep showing interest an early withdrawal forfeited.
 const displayValue = (inv) => {
   if (inv.pending_payout_amount != null) return parseFloat(inv.pending_payout_amount);
   if (inv.status === 'matured') return parseFloat(inv.maturity_amount);
+  // An early withdrawal pays the principal back and nothing more. Rows closed
+  // before the payout amount was recorded would otherwise keep "growing".
+  if (inv.status === 'withdrawn') return parseFloat(inv.principal_amount);
   return calculateCurrentValue(inv);
 };
 
@@ -288,12 +286,13 @@ const withdrawInvestment = async (req, res) => {
 };
 
 // POST /api/investment/reinvest/:id   { tenure_months? }
-// The other choice at maturity. The whole maturity amount — the principal plus
-// the interest it earned — becomes the principal of a new investment that
-// starts today at the current rate, for the tenure the user picks (the same
-// one as before if they don't). No money leaves, so there is nothing for an
-// admin to approve: the matured investment is closed as 'reinvested' and the
-// new one points back at it (reinvested_from_id).
+// The other choice at maturity. The investment is renewed in place: its whole
+// maturity amount — the principal plus the interest it earned — becomes the
+// principal of a fresh term that starts today at the current rate, for the
+// tenure the user picks (the same one as before if they don't). No money
+// leaves, so there is nothing for an admin to approve.
+// The term that just ended stays on record as a ₹0 transaction on the
+// investment, next to the payment that first funded it.
 const reinvestInvestment = async (req, res) => {
   const conn = await pool.getConnection();
   try {
@@ -326,33 +325,9 @@ const reinvestInvestment = async (req, res) => {
 
     // The amount limits are for fresh money coming in; this is the user's own
     // matured money staying put, so it is rolled over whole.
+    const previousPrincipal = parseFloat(investment.principal_amount);
     const principal = parseFloat(investment.maturity_amount);
     const maturityAmount = calculateMaturityAmount(principal, settings.monthly_rate, tenureMonths);
-
-    const [created] = await conn.query(
-      `INSERT INTO investments
-         (user_id, principal_amount, interest_rate, tenure_months, maturity_amount, status, start_date, maturity_date, reinvested_from_id)
-       VALUES (?, ?, ?, ?, ?, 'active', CURDATE(), DATE_ADD(CURDATE(), INTERVAL ? MONTH), ?)`,
-      [userId, principal, settings.monthly_rate, tenureMonths, maturityAmount, tenureMonths, investment.id]
-    );
-    const newId = created.insertId;
-
-    const [closed] = await conn.query(
-      `UPDATE investments SET status = 'reinvested', pending_payout_amount = ?, is_early_withdrawal = 0, matured_at = NOW()
-        WHERE id = ? AND status = ?`,
-      [principal, investment.id, investment.status]
-    );
-    if (closed.affectedRows !== 1) {
-      // Lost a race with a withdrawal or a second reinvest request.
-      await conn.rollback();
-      return res.status(409).json({ success: false, message: 'Investment status changed — please refresh and try again' });
-    }
-    // A database that hasn't had the migration silently stores '' for an
-    // unknown ENUM value when it isn't in strict mode — never commit that.
-    const [[after]] = await conn.query('SELECT status FROM investments WHERE id = ?', [investment.id]);
-    if (after?.status !== 'reinvested') {
-      throw Object.assign(new Error("investments.status does not accept 'reinvested'"), { reinvestSchemaMissing: true });
-    }
 
     if (investment.payout_transaction_id) {
       // Closed by the old maturity cron, which credited wallet_balance and
@@ -361,12 +336,44 @@ const reinvestInvestment = async (req, res) => {
       await conn.query('UPDATE users SET wallet_balance = GREATEST(0, wallet_balance - ?) WHERE id = ?', [principal, userId]);
       await conn.query(
         'UPDATE transactions SET description = ? WHERE id = ?',
-        [`Maturity amount reinvested into investment #${newId} — no payout was sent`, investment.payout_transaction_id]
+        ['Maturity amount reinvested — no payout was sent', investment.payout_transaction_id]
       );
     }
 
-    const [[fresh]] = await conn.query('SELECT maturity_date FROM investments WHERE id = ?', [newId]);
-    const notifMsg = `₹${principal} from your matured investment has been reinvested for ${tenureMonths} month${tenureMonths > 1 ? 's' : ''} at ${settings.monthly_rate}%/month. It will be worth ₹${maturityAmount} on maturity.`;
+    // Everything about the finished term is reset, including the link to that
+    // old payout transaction: when this new term is paid out it must be
+    // credited afresh.
+    const [renewed] = await conn.query(
+      `UPDATE investments SET
+         principal_amount = ?, interest_rate = ?, tenure_months = ?, maturity_amount = ?,
+         status = 'active', start_date = CURDATE(), maturity_date = DATE_ADD(CURDATE(), INTERVAL ? MONTH),
+         matured_at = NULL, payout_transaction_id = NULL, payout_method = NULL,
+         payout_account_holder = NULL, payout_account_number = NULL, payout_ifsc = NULL, payout_upi_id = NULL,
+         pending_payout_amount = NULL, is_early_withdrawal = NULL, withdrawal_requested_at = NULL
+       WHERE id = ? AND status = ?`,
+      [principal, settings.monthly_rate, tenureMonths, maturityAmount, tenureMonths, investment.id, investment.status]
+    );
+    if (renewed.affectedRows !== 1) {
+      // Lost a race with a withdrawal or a second reinvest request.
+      await conn.rollback();
+      return res.status(409).json({ success: false, message: 'Investment status changed — please refresh and try again' });
+    }
+
+    const months = `${tenureMonths} month${tenureMonths > 1 ? 's' : ''}`;
+    // A memo entry, not a payment: nothing was received, so the amount is 0 and
+    // there is no order id. It can't be read as a second payment in the user's
+    // history or counted as money in.
+    await conn.query(
+      `INSERT INTO transactions (user_id, investment_id, amount, type, status, description)
+       VALUES (?, ?, ?, ?, 'success', ?)`,
+      [
+        userId, investment.id, 0, 'investment',
+        `Reinvested at maturity — ₹${previousPrincipal} had grown to ₹${principal}; renewed for ${months} @ ${settings.monthly_rate}%/month (no new payment)`,
+      ]
+    );
+
+    const [[fresh]] = await conn.query('SELECT maturity_date FROM investments WHERE id = ?', [investment.id]);
+    const notifMsg = `₹${principal} from your matured investment has been reinvested for ${months} at ${settings.monthly_rate}%/month. It will be worth ₹${maturityAmount} on maturity.`;
     await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [userId, '🔁 Investment Reinvested', notifMsg, 'payment']
@@ -382,24 +389,19 @@ const reinvestInvestment = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: `₹${principal} reinvested for ${tenureMonths} month${tenureMonths > 1 ? 's' : ''}. It will be worth ₹${maturityAmount} on maturity.`,
+      message: `₹${principal} reinvested for ${months}. It will be worth ₹${maturityAmount} on maturity.`,
       investment: {
-        id: newId,
+        id: investment.id,
         principal_amount: principal,
         interest_rate: settings.monthly_rate,
         tenure_months: tenureMonths,
         maturity_amount: maturityAmount,
         maturity_date: fresh?.maturity_date || null,
         status: 'active',
-        reinvested_from_id: investment.id,
       },
     });
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
-    if (isMissingReinvestSchema(err)) {
-      console.error(`⚠️  [reinvestInvestment] The investments table is not ready for reinvestment — ${REINVEST_MIGRATION_HINT}.`, err.message);
-      return res.status(503).json({ success: false, message: 'Reinvestment is not available right now. Please try again later, or withdraw instead.' });
-    }
     console.error('[reinvestInvestment]', err);
     res.status(500).json({ success: false, message: err.message });
   } finally {
@@ -413,23 +415,10 @@ const forInvestor = (inv) => ({
   ...inv,
   is_matured: !!inv.is_matured,
   can_withdraw: isWithdrawable(inv),
-  // Not offered until the database has the reinvest columns (see REINVEST_MIGRATION_HINT).
-  can_reinvest: 'reinvested_from_id' in inv && isReinvestable(inv),
+  can_reinvest: isReinvestable(inv),
   current_value: displayValue(inv),
 });
 const INVESTOR_COLUMNS = '*, (maturity_date IS NOT NULL AND maturity_date <= CURDATE()) AS is_matured';
-
-// The investment a reinvested one was rolled into, or null. Also null on a
-// database that doesn't have the reinvest columns yet.
-const findReinvestedInto = async (investmentId) => {
-  try {
-    const [[next]] = await pool.query('SELECT id FROM investments WHERE reinvested_from_id = ? ORDER BY id DESC LIMIT 1', [investmentId]);
-    return next?.id ?? null;
-  } catch (err) {
-    if (isMissingReinvestSchema(err)) return null;
-    throw err;
-  }
-};
 
 // GET /api/investment/my-investments
 const getMyInvestments = async (req, res) => {
@@ -439,12 +428,7 @@ const getMyInvestments = async (req, res) => {
       [req.user.id]
     );
 
-    // old investment id → the one it was reinvested into
-    const reinvestedInto = new Map(rows.filter(r => r.reinvested_from_id).map(r => [r.reinvested_from_id, r.id]));
-    res.json({
-      success: true,
-      investments: rows.map(r => ({ ...forInvestor(r), reinvested_into_id: reinvestedInto.get(r.id) ?? null })),
-    });
+    res.json({ success: true, investments: rows.map(forInvestor) });
   } catch (err) {
     console.error('[getMyInvestments]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -467,7 +451,7 @@ const getInvestmentDetails = async (req, res) => {
 
     res.json({
       success: true,
-      investment: { ...forInvestor(rows[0]), reinvested_into_id: await findReinvestedInto(rows[0].id) },
+      investment: forInvestor(rows[0]),
       transactions,
     });
   } catch (err) {
@@ -526,12 +510,14 @@ const adminGetAllInvestments = async (req, res) => {
       params.push(q, q);
     }
 
+    // Withdrawal requests come first: they are the rows waiting on the admin,
+    // and are usually old investments that would otherwise sit pages deep.
     const [investments] = await pool.query(
       `SELECT i.*, u.full_name AS user_name, u.mobile AS user_mobile
          FROM investments i
          JOIN users u ON u.id = i.user_id
         WHERE 1=1 ${where}
-        ORDER BY i.created_at DESC
+        ORDER BY (i.status = 'withdrawal_requested') DESC, i.created_at DESC
         LIMIT ? OFFSET ?`,
       [...params, Number(limit), Number(offset)]
     );
@@ -543,9 +529,14 @@ const adminGetAllInvestments = async (req, res) => {
       params
     );
 
+    // Every request waiting for approval, whatever filter / search is on.
+    const [[{ awaiting }]] = await pool.query(
+      "SELECT COUNT(*) AS awaiting FROM investments WHERE status = 'withdrawal_requested'"
+    );
+
     const withCurrentValue = investments.map(inv => ({ ...inv, current_value: displayValue(inv) }));
 
-    res.json({ success: true, investments: withCurrentValue, total });
+    res.json({ success: true, investments: withCurrentValue, total, awaiting_approval: Number(awaiting) });
   } catch (err) {
     console.error('[adminGetAllInvestments]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -571,7 +562,7 @@ const adminGetInvestmentDetail = async (req, res) => {
 
     res.json({
       success: true,
-      investment: { ...rows[0], current_value: displayValue(rows[0]), reinvested_into_id: await findReinvestedInto(rows[0].id) },
+      investment: { ...rows[0], current_value: displayValue(rows[0]) },
       transactions,
     });
   } catch (err) {
@@ -655,6 +646,11 @@ const adminCompleteWithdrawal = async (req, res) => {
       sendNotification(user.fcm_token, '✅ Withdrawal Complete', notifMsg, { screen: 'Investment' }).catch(() => {});
     }
 
+    await auditLog({
+      req, action: 'withdrawal_approved', entityType: 'investment', entityId: investment.id,
+      details: { amount: payoutAmount, early: isEarly, utr: mockUTR, user_id: investment.user_id },
+    });
+
     res.json({ success: true, message: 'Withdrawal marked as sent', amount: payoutAmount, utr: mockUTR });
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
@@ -665,9 +661,82 @@ const adminCompleteWithdrawal = async (req, res) => {
   }
 };
 
+// POST /api/admin/investments/:id/reject-withdrawal   { reason }
+// The admin's other answer to a withdrawal request. Nothing has been paid at
+// this point, so the request is simply undone: the investment goes back to
+// exactly where it was before the user asked — still held, earning or matured
+// — and they can ask again or reinvest. The reason is sent to the user.
+const adminRejectWithdrawal = async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    const { id } = req.params;
+    const reason = String(req.body?.reason ?? '').trim().slice(0, 300);
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'A reason is required — it is sent to the customer' });
+    }
+
+    await conn.beginTransaction();
+
+    const [[investment]] = await conn.query(
+      "SELECT * FROM investments WHERE id = ? AND status = 'withdrawal_requested' FOR UPDATE",
+      [id]
+    );
+    if (!investment) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: 'No pending withdrawal request found for this investment' });
+    }
+
+    const amount = parseFloat(investment.pending_payout_amount);
+    // A request starts from 'active', or from 'matured' on a row the old
+    // maturity cron had closed — and only those rows already carry a payout
+    // transaction while their request is still pending.
+    const restoredStatus = investment.payout_transaction_id ? 'matured' : 'active';
+
+    const [updateResult] = await conn.query(
+      `UPDATE investments SET
+         status = ?,
+         payout_method = NULL, payout_account_holder = NULL, payout_account_number = NULL, payout_ifsc = NULL, payout_upi_id = NULL,
+         pending_payout_amount = NULL, is_early_withdrawal = NULL, withdrawal_requested_at = NULL
+       WHERE id = ? AND status = 'withdrawal_requested'`,
+      [restoredStatus, id]
+    );
+    if (updateResult.affectedRows !== 1) {
+      await conn.rollback();
+      return res.status(409).json({ success: false, message: 'Withdrawal request status changed — please refresh and try again' });
+    }
+
+    const notifMsg = `Your withdrawal request of ₹${amount} was not approved. Reason: ${reason}. No money was sent — your investment is open again, and you can request the withdrawal again from Investments.`;
+    await conn.query(
+      'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+      [investment.user_id, '❌ Withdrawal Not Approved', notifMsg, 'payment']
+    );
+
+    await conn.commit();
+
+    await invalidateUserCache(investment.user_id).catch(() => {});
+    const [[user]] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [investment.user_id]);
+    if (user?.fcm_token) {
+      sendNotification(user.fcm_token, '❌ Withdrawal Not Approved', notifMsg, { screen: 'Investment' }).catch(() => {});
+    }
+
+    await auditLog({
+      req, action: 'withdrawal_rejected', entityType: 'investment', entityId: investment.id,
+      details: { amount, reason, user_id: investment.user_id },
+    });
+
+    res.json({ success: true, message: 'Withdrawal request rejected — the investment is open again', status: restoredStatus });
+  } catch (err) {
+    try { await conn.rollback(); } catch (_) {}
+    console.error('[adminRejectWithdrawal]', err);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    conn.release();
+  }
+};
+
 module.exports = {
   getInvestmentSettings, previewMaturity,
   createInvestment, cancelInvestment, withdrawInvestment, reinvestInvestment,
   getMyInvestments, getInvestmentDetails, getPortfolioSummary,
-  adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal,
+  adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal, adminRejectWithdrawal,
 };

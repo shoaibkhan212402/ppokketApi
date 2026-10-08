@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
+const { loadChargeContext, chargesAsOf, loanChargeSummary, attachLoanCharges, attachEmiCharges } = require('../utils/loanCharges');
 const { sendNotification } = require('../utils/fcm');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { sendLoanAgreementEmail } = require('../utils/email');
@@ -89,11 +90,15 @@ const applyLoan = async (req, res) => {
       first_emi_principal_pct: resolvedFirstEmiPct
     };
 
-    // Generate schedule to resolve true total payable based on custom user settings
+    // Generate schedule to resolve true total payable based on custom user settings.
+    // The per-EMI charges set in Admin → Charges are part of it; the final
+    // figures are fixed when the loan is approved.
+    const chargeCtx = await loadChargeContext();
     const schedule = generateEMISchedule(
       { amount, interest_rate, duration_months, emi_amount, processing_fee },
       null,
-      mergedSettings
+      mergedSettings,
+      chargesAsOf(chargeCtx.versions, chargeCtx.now)
     );
 
     const total_payable = schedule.reduce((sum, r) => sum + parseFloat(r.emi_amount), 0);
@@ -151,13 +156,16 @@ const getLoanHistory = async (req, res) => {
     if (cached) return res.json(cached);
 
     const [loans] = await pool.query(
-      `SELECT l.*,
+      `SELECT l.*, UNIX_TIMESTAMP(l.approved_at) AS approved_ts,
         (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date,
         (SELECT e.emi_amount + IF(e.penalty_waived, 0, e.penalty_amount) FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
         (SELECT IFNULL(SUM(e.principal_amount), 0) FROM emi_schedule e WHERE e.loan_id = l.id AND e.status = 'paid') AS principal_paid
        FROM loans l WHERE l.user_id = ? ORDER BY l.created_at DESC`,
       [req.user.id]
     );
+    // loan.charges: what is deducted at disbursal, what each EMI carries, and
+    // the amount that reaches the bank account
+    attachLoanCharges(loans, await loadChargeContext());
     const response = { success: true, loans };
     await setCache(cacheKey, response, CACHE_TTL.MEDIUM);
     res.json(response);
@@ -171,10 +179,13 @@ const getLoanHistory = async (req, res) => {
 const getLoanDetails = async (req, res) => {
   try {
     const [loan] = await pool.query(
-      'SELECT * FROM loans WHERE id = ? AND user_id = ?',
+      'SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ? AND user_id = ?',
       [req.params.id, req.user.id]
     );
     if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
+
+    const chargeCtx = await loadChargeContext();
+    attachLoanCharges(loan, chargeCtx);
 
     let emiSchedule = [];
     if (['disbursed', 'closed'].includes(loan[0].status)) {
@@ -182,7 +193,7 @@ const getLoanDetails = async (req, res) => {
         'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no',
         [req.params.id]
       );
-      emiSchedule = rows;
+      emiSchedule = attachEmiCharges(rows, loan[0], chargeCtx);
     }
     const [transactions] = await pool.query(
       'SELECT * FROM transactions WHERE loan_id = ? ORDER BY created_at DESC',
@@ -259,25 +270,43 @@ const emiCalculator = async (req, res) => {
       first_emi_principal_pct: resolvedFirstEmiPct
     };
 
+    // Charges set in Admin → Charges, as a loan approved now would carry them
+    const chargeCtx = await loadChargeContext();
+    const loanCharges = chargesAsOf(chargeCtx.versions, chargeCtx.now);
+
     // Generate schedule
     const schedule = generateEMISchedule(
       { amount: principal, interest_rate: rateVal, duration_months: months, emi_amount: emi, processing_fee },
       null,
-      mergedSettings
+      mergedSettings,
+      loanCharges
     );
 
     const total_payable = schedule.reduce((sum, r) => sum + parseFloat(r.emi_amount), 0);
-    const total_interest = total_payable - principal - (settings.processing_fee_in_first_emi ? 0 : processing_fee);
+    // Per-EMI charges are inside total_payable but are not interest
+    const total_emi_charges = Math.round(schedule.reduce((sum, r) => sum + r.emi_charges, 0) * 100) / 100;
+    const total_interest = total_payable - principal - (settings.processing_fee_in_first_emi ? 0 : processing_fee) - total_emi_charges;
+    // What a regular instalment carries (the first one can differ on a step-down plan)
+    const emi_charges = (schedule[1] || schedule[0])?.emi_charges || 0;
 
     res.json({
       success: true,
       emi_amount: Math.round(emi),
+      emi_charges,
+      emi_with_charges: Math.round(emi + emi_charges),
       total_payable: Math.round(total_payable),
       total_interest: Math.round(total_interest),
+      total_emi_charges,
       processing_fee,
       processing_fee_pct: feePct,
       interest_rate: rateVal,
       effective_limit,
+      charges: loanChargeSummary(
+        { amount: principal, processing_fee, processing_fee_in_first_emi: !!settings.processing_fee_in_first_emi },
+        loanCharges,
+        settings,
+        schedule
+      ),
       schedule,
     });
   } catch (err) {
@@ -293,7 +322,7 @@ const getEmiSchedule = async (req, res) => {
     const userId = req.user.id;
 
     // Ensure the loan belongs to this user
-    const [loan] = await pool.query('SELECT * FROM loans WHERE id = ? AND user_id = ?', [loanId, userId]);
+    const [loan] = await pool.query('SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ? AND user_id = ?', [loanId, userId]);
     if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
 
     let schedule = [];
@@ -302,7 +331,8 @@ const getEmiSchedule = async (req, res) => {
         'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
         [loanId]
       );
-      schedule = rows;
+      // Each instalment also says how much of it is charges, and which ones
+      schedule = attachEmiCharges(rows, loan[0], await loadChargeContext());
     }
 
     res.json({ success: true, schedule });

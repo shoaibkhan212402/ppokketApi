@@ -3,6 +3,23 @@ const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../confi
 const { sendNotification } = require('../utils/fcm');
 const { verifyBankAccount, verifyIFSC, compareName } = require('../utils/bankVerify');
 const { sendWelcomeEmail } = require('../utils/email');
+const { loadChargeContext, chargesAsOf, attachLoanCharges, attachEmiCharges } = require('../utils/loanCharges');
+const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
+
+// Where the customer works (company, designation, experience, offer letter),
+// added to the profile the clients receive. `employment_unavailable` tells
+// their forms not to insist on details the server is unable to store.
+const addEmployment = async (user) => {
+  user.employment = await getEmployment(user.id);
+  user.employment_unavailable = isEmploymentUnavailable();
+};
+
+// The extra charges (Admin → Charges) a loan approved now would carry, in the
+// shape the app's own EMI preview needs.
+const currentLoanCharges = async () => {
+  const ctx = await loadChargeContext();
+  return chargesAsOf(ctx.versions, ctx.now).map(({ name, applies_to, type, value }) => ({ name, applies_to, type, value }));
+};
 
 // Fixed credit calculation: occupied = original loan amount until fully closed.
 // Paying EMIs does NOT increase available credit — only loan closure frees it.
@@ -68,6 +85,8 @@ const getProfile = async (req, res) => {
     user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
     user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
     user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+    user.loan_charges = await currentLoanCharges();
+    await addEmployment(user);
 
     // Calculate dynamic revolving limits
     const creditDetails = await getUserCreditDetails(user.id, user.credit_limit, user.withdrawal_limit);
@@ -114,6 +133,19 @@ const updateProfile = async (req, res) => {
         if (monthly_income === undefined || monthly_income === null || parseFloat(monthly_income) <= 0) {
           return res.status(400).json({ success: false, message: 'Monthly Income is required and must be greater than 0' });
         }
+      }
+    }
+
+    // Where the customer works. Optional at this level, so an app version that
+    // does not know about it keeps working; the current forms require it from
+    // salaried and self-employed people. Checked before anything is saved.
+    let employment; // undefined = not sent → whatever is stored is left alone
+    if (req.body.employment !== undefined) {
+      try {
+        employment = cleanEmployment(req.body.employment);
+      } catch (err) {
+        if (err.isValidation) return res.status(400).json({ success: false, message: err.message });
+        throw err;
       }
     }
 
@@ -195,10 +227,12 @@ const updateProfile = async (req, res) => {
       WHERE id = ?`,
       [final_name, final_email, final_pan, final_aadhaar, final_dob, final_occ, final_inc, fcm_token, dark_mode, language, req.user.id]
     );
+    if (employment !== undefined) await saveEmployment(req.user.id, employment);
+
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
     const user = rows[0];
     delete user.password;
-    
+
     // Load global system settings for fallbacks
     const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
     const settings = {};
@@ -212,6 +246,8 @@ const updateProfile = async (req, res) => {
     user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
     user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
     user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+    user.loan_charges = await currentLoanCharges();
+    await addEmployment(user);
 
     // Send welcome email the first time a user sets their email address
     const isFirstEmail = !u.old_email && final_email;
@@ -467,12 +503,12 @@ const getDashboard = async (req, res) => {
       ? 'approved'
       : (kycRows[0]?.status || 'not_submitted');
     const [activeLoan] = await pool.query(
-      'SELECT * FROM loans WHERE user_id = ? AND status IN ("disbursed","approved","withdrawal_requested") ORDER BY created_at DESC LIMIT 1', [userId]
+      'SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE user_id = ? AND status IN ("disbursed","approved","withdrawal_requested") ORDER BY created_at DESC LIMIT 1', [userId]
     );
     // An application still waiting on review isn't an "active" loan, but the
     // home screen needs it to say "under review" instead of "limit ready".
     const [pendingLoan] = await pool.query(
-      'SELECT * FROM loans WHERE user_id = ? AND status IN ("pending","under_review") ORDER BY created_at DESC LIMIT 1', [userId]
+      'SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE user_id = ? AND status IN ("pending","under_review") ORDER BY created_at DESC LIMIT 1', [userId]
     );
     let nextEmiRow = null;
     if (activeLoan.length && activeLoan[0].status === 'disbursed') {
@@ -480,6 +516,13 @@ const getDashboard = async (req, res) => {
         'SELECT * FROM emi_schedule WHERE user_id = ? AND status IN ("upcoming","overdue") ORDER BY due_date ASC LIMIT 1', [userId]
       );
       nextEmiRow = nextEmi[0] || null;
+    }
+    // Extra charges (Admin → Charges) each loan carries, and the share of the
+    // next instalment that is charges
+    const chargeCtx = await loadChargeContext();
+    attachLoanCharges([...activeLoan, ...pendingLoan], chargeCtx);
+    if (nextEmiRow && nextEmiRow.loan_id === activeLoan[0].id) {
+      [nextEmiRow] = attachEmiCharges([nextEmiRow], activeLoan[0], chargeCtx);
     }
     const [recentTxn] = await pool.query(
       "SELECT * FROM transactions WHERE user_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT 5", [userId]
@@ -543,5 +586,37 @@ const markNotificationsRead = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead, getUserCreditDetails };
+// POST /api/user/offer-letter   (multipart form, file field "offer_letter")
+// The customer's current-employer offer letter, as a PDF or a photo. Optional.
+// It is stored the same way as the KYC documents (see middleware/upload.js).
+const uploadOfferLetter = async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, message: 'Please choose your offer letter (PDF or photo).' });
+    }
+
+    // FTP and Cloudinary storage hand back a full URL; local disk a file name.
+    let url = null;
+    if (file.path && /^https?:\/\//i.test(file.path)) url = file.path;
+    else if (file.secure_url) url = file.secure_url;
+    else if (file.filename) url = `${req.protocol}://${req.get('host')}/uploads/${file.filename}`;
+    if (!url) {
+      return res.status(500).json({ success: false, message: 'The file could not be stored. Please try again.' });
+    }
+
+    const saved = await saveOfferLetter(req.user.id, url);
+    if (!saved) {
+      return res.status(503).json({ success: false, message: 'Offer letter could not be saved right now. Please try again later.' });
+    }
+
+    await invalidateUserCache(req.user.id);
+    res.json({ success: true, message: 'Offer letter uploaded', employment: await getEmployment(req.user.id) });
+  } catch (err) {
+    console.error('[uploadOfferLetter]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { getProfile, updateProfile, uploadOfferLetter, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead, getUserCreditDetails };
 
