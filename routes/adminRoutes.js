@@ -3,7 +3,7 @@ const router = express.Router();
 const {
   getAdminDashboard, getAllUsers, getAllLoans,
   approveLoan, rejectLoan, disburseLoan,
-  processLoan, previewEMI, setWithdrawalLimit,
+  processLoan, previewEMI, setWithdrawalLimit, setUserCustomCharges,
   getPendingKYC, reviewKYC,
   getAllTransactions, sendBulkNotification,
   getLoanEMISchedule, getOverdueEmis, setPenaltyWaiver,
@@ -64,6 +64,7 @@ router.get('/users', requirePermission('manage_users'), getAllUsers);
 router.put('/users/:userId/credit-limit', requirePermission('manage_users'), updateCreditLimit);
 router.put('/users/:userId/toggle-status', requirePermission('manage_users'), toggleUserStatus);
 router.put('/users/:userId/withdrawal-limit', requirePermission('manage_users'), setWithdrawalLimit);
+router.put('/users/:userId/custom-charges',   requirePermission('manage_users'), setUserCustomCharges);
 router.get('/loans', requirePermission('manage_loans'), getAllLoans);
 router.get('/loans/:id/emi-schedule', requirePermission('manage_loans'), getLoanEMISchedule);
 router.get('/overdue-emis', requirePermission('manage_loans'), getOverdueEmis);

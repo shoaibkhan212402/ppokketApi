@@ -1205,6 +1205,64 @@ const updateCreditLimit = async (req, res) => {
   }
 };
 
+
+// PUT /api/admin/users/:userId/custom-charges
+// Per-user overrides for processing fee % and first-EMI % that apply to every
+// new loan this customer takes. Pass null to revert to the global system default.
+const setUserCustomCharges = async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const { custom_processing_fee_pct, custom_first_emi_pct } = req.body;
+
+    if (custom_processing_fee_pct !== null && custom_processing_fee_pct !== undefined) {
+      const v = parseFloat(custom_processing_fee_pct);
+      if (isNaN(v) || v < 0 || v > 100)
+        return res.status(400).json({ success: false, message: 'Processing fee must be 0 - 100 %' });
+    }
+    if (custom_first_emi_pct !== null && custom_first_emi_pct !== undefined) {
+      const v = parseFloat(custom_first_emi_pct);
+      if (isNaN(v) || v < 0 || v > 100)
+        return res.status(400).json({ success: false, message: 'First EMI % must be 0 - 100 %' });
+    }
+
+    const toVal = (raw) =>
+      raw === null || raw === '' ? null
+      : raw !== undefined ? parseFloat(raw)
+      : undefined;
+
+    const feePct   = toVal(custom_processing_fee_pct);
+    const firstPct = toVal(custom_first_emi_pct);
+
+    const updates = [];
+    const params  = [];
+    if (feePct !== undefined)   { updates.push('custom_processing_fee_pct = ?'); params.push(feePct); }
+    if (firstPct !== undefined) { updates.push('custom_first_emi_pct = ?');      params.push(firstPct); }
+
+    if (!updates.length)
+      return res.status(400).json({ success: false, message: 'Nothing to update' });
+
+    params.push(userId);
+    const [result] = await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    if (result.affectedRows === 0)
+      return res.status(404).json({ success: false, message: 'User not found' });
+
+    await invalidateUserCache(userId);
+    await auditLog({
+      req, action: 'user_custom_charges_set', entityType: 'user', entityId: userId,
+      details: { custom_processing_fee_pct: feePct, custom_first_emi_pct: firstPct },
+    });
+
+    res.json({
+      success: true,
+      message: "Custom charges saved - will apply to this user's next loan",
+      custom_processing_fee_pct: feePct,
+      custom_first_emi_pct: firstPct,
+    });
+  } catch (err) {
+    console.error('[setUserCustomCharges]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
 // PUT /api/admin/users/:userId/toggle-status
 const toggleUserStatus = async (req, res) => {
   try {
@@ -1771,7 +1829,7 @@ module.exports = {
   getAdminDashboard, getAllUsers, getAllLoans,
   setLoanSettlement,
   approveLoan, rejectLoan, disburseLoan,
-  processLoan, previewEMI, setWithdrawalLimit,
+  processLoan, previewEMI, setWithdrawalLimit, setUserCustomCharges,
   getPendingKYC, reviewKYC,
   getAllTransactions, sendBulkNotification,
   getLoanEMISchedule, getOverdueEmis, setPenaltyWaiver,
