@@ -1,5 +1,5 @@
-const crypto = require('crypto');
 const { pool } = require('../config/db');
+const { cleanBankReference } = require('../utils/helpers');
 const { calculateMaturityAmount, calculateCurrentValue } = require('../utils/investmentUtils');
 const { sendNotification } = require('../utils/fcm');
 const { invalidateUserCache } = require('../config/redis');
@@ -584,7 +584,20 @@ const adminCompleteWithdrawal = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // The bank's reference for the transfer the admin has just made. The
+    // customer is shown it, so it is never invented here.
+    const utr = cleanBankReference(req.body?.utr);
+    if (!utr) {
+      return res.status(400).json({ success: false, message: 'Enter the bank reference (UTR) of the transfer you made to the customer.' });
+    }
+
     await conn.beginTransaction();
+
+    const [used] = await conn.query('SELECT id FROM transactions WHERE receipt_url = ? LIMIT 1', [`UTR: ${utr}`]);
+    if (used.length) {
+      await conn.rollback();
+      return res.status(409).json({ success: false, message: 'This bank reference is already recorded for another payout. Please check it.' });
+    }
 
     const [[investment]] = await conn.query(
       "SELECT * FROM investments WHERE id = ? AND status = 'withdrawal_requested' FOR UPDATE",
@@ -599,13 +612,12 @@ const adminCompleteWithdrawal = async (req, res) => {
     const isEarly = !!investment.is_early_withdrawal;
     const newStatus = isEarly ? 'withdrawn' : 'matured';
     const txnType = isEarly ? 'investment_withdrawal' : 'investment_payout';
-    const mockUTR = 'PAYOUT' + crypto.randomBytes(6).toString('hex').toUpperCase();
     const destination = investment.payout_method === 'upi'
       ? `UPI ${investment.payout_upi_id}`
       : `A/C ****${(investment.payout_account_number || '').slice(-4)} (IFSC ${investment.payout_ifsc})`;
     const description = isEarly
-      ? `Early withdrawal sent to ${destination} — principal only, interest forfeited. UTR: ${mockUTR}`
-      : `Maturity payout sent to ${destination}. UTR: ${mockUTR}`;
+      ? `Early withdrawal sent to ${destination} — principal only, interest forfeited. UTR: ${utr}`
+      : `Maturity payout sent to ${destination}. UTR: ${utr}`;
 
     const [updateResult] = await conn.query(
       "UPDATE investments SET status = ?, matured_at = NOW() WHERE id = ? AND status = 'withdrawal_requested'",
@@ -620,14 +632,14 @@ const adminCompleteWithdrawal = async (req, res) => {
       // Closed by the old maturity cron, which already credited wallet_balance
       // and wrote the payout transaction before any money was sent. Record
       // where it actually went instead of counting the payout a second time.
-      await conn.query('UPDATE transactions SET description = ? WHERE id = ?', [description, investment.payout_transaction_id]);
+      await conn.query('UPDATE transactions SET description = ?, receipt_url = ? WHERE id = ?', [description, `UTR: ${utr}`, investment.payout_transaction_id]);
     } else {
       await conn.query('UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?', [payoutAmount, investment.user_id]);
 
       const [txnResult] = await conn.query(
-        `INSERT INTO transactions (user_id, investment_id, amount, type, status, description)
-         VALUES (?, ?, ?, ?, 'success', ?)`,
-        [investment.user_id, investment.id, payoutAmount, txnType, description]
+        `INSERT INTO transactions (user_id, investment_id, amount, type, status, description, receipt_url)
+         VALUES (?, ?, ?, ?, 'success', ?, ?)`,
+        [investment.user_id, investment.id, payoutAmount, txnType, description, `UTR: ${utr}`]
       );
       await conn.query('UPDATE investments SET payout_transaction_id = ? WHERE id = ?', [txnResult.insertId, investment.id]);
     }
@@ -648,10 +660,10 @@ const adminCompleteWithdrawal = async (req, res) => {
 
     await auditLog({
       req, action: 'withdrawal_approved', entityType: 'investment', entityId: investment.id,
-      details: { amount: payoutAmount, early: isEarly, utr: mockUTR, user_id: investment.user_id },
+      details: { amount: payoutAmount, early: isEarly, utr, user_id: investment.user_id },
     });
 
-    res.json({ success: true, message: 'Withdrawal marked as sent', amount: payoutAmount, utr: mockUTR });
+    res.json({ success: true, message: 'Withdrawal marked as sent', amount: payoutAmount, utr });
   } catch (err) {
     try { await conn.rollback(); } catch (_) {}
     console.error('[adminCompleteWithdrawal]', err);

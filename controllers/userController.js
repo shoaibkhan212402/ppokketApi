@@ -3,8 +3,10 @@ const { getCache, setCache, invalidateUserCache, CACHE_TTL } = require('../confi
 const { sendNotification } = require('../utils/fcm');
 const { verifyBankAccount, verifyIFSC, compareName } = require('../utils/bankVerify');
 const { sendWelcomeEmail } = require('../utils/email');
-const { loadChargeContext, chargesAsOf, attachLoanCharges, attachEmiCharges } = require('../utils/loanCharges');
+const { loadChargeContext, chargesAsOf, plainCharges, attachLoanCharges, attachEmiCharges } = require('../utils/loanCharges');
+const { defaultFirstEmiDate } = require('../utils/loanUtils');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
+const { companyNames } = require('../utils/companies');
 
 // Where the customer works (company, designation, experience, offer letter),
 // added to the profile the clients receive. `employment_unavailable` tells
@@ -18,7 +20,7 @@ const addEmployment = async (user) => {
 // shape the app's own EMI preview needs.
 const currentLoanCharges = async () => {
   const ctx = await loadChargeContext();
-  return chargesAsOf(ctx.versions, ctx.now).map(({ name, applies_to, type, value }) => ({ name, applies_to, type, value }));
+  return plainCharges(chargesAsOf(ctx.versions, ctx.now)).map(({ name, applies_to, type, value }) => ({ name, applies_to, type, value }));
 };
 
 // Fixed credit calculation: occupied = original loan amount until fully closed.
@@ -85,6 +87,8 @@ const getProfile = async (req, res) => {
     user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
     user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
     user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+    // When a loan approved today would first fall due (Admin → Settings → EMI due date)
+    user.first_emi_date = defaultFirstEmiDate(settings);
     user.loan_charges = await currentLoanCharges();
     await addEmployment(user);
 
@@ -246,6 +250,8 @@ const updateProfile = async (req, res) => {
     user.processing_fee_pct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : defaultProcFeePct;
     user.processing_fee_in_first_emi = settings.processing_fee_in_first_emi === 'true' || settings.processing_fee_in_first_emi === true || settings.processing_fee_in_first_emi === '1';
     user.gst_on_processing_fee = parseFloat(settings.gst_on_processing_fee || 18);
+    // When a loan approved today would first fall due (Admin → Settings → EMI due date)
+    user.first_emi_date = defaultFirstEmiDate(settings);
     user.loan_charges = await currentLoanCharges();
     await addEmployment(user);
 
@@ -522,7 +528,7 @@ const getDashboard = async (req, res) => {
     const chargeCtx = await loadChargeContext();
     attachLoanCharges([...activeLoan, ...pendingLoan], chargeCtx);
     if (nextEmiRow && nextEmiRow.loan_id === activeLoan[0].id) {
-      [nextEmiRow] = attachEmiCharges([nextEmiRow], activeLoan[0], chargeCtx);
+      [nextEmiRow] = await attachEmiCharges([nextEmiRow], activeLoan[0], chargeCtx);
     }
     const [recentTxn] = await pool.query(
       "SELECT * FROM transactions WHERE user_id = ? AND status = 'success' ORDER BY created_at DESC LIMIT 5", [userId]
@@ -618,5 +624,14 @@ const uploadOfferLetter = async (req, res) => {
   }
 };
 
-module.exports = { getProfile, updateProfile, uploadOfferLetter, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead, getUserCreditDetails };
+// GET /api/user/companies   (no login needed)
+// Company names the profile forms suggest once the customer has typed a few
+// letters of where they work. The forms fetch the whole list once and search
+// it themselves, so typing never waits on the server.
+const getCompanies = (req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({ success: true, companies: companyNames() });
+};
+
+module.exports = { getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead, getUserCreditDetails };
 

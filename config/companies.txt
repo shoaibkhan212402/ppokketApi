@@ -1,0 +1,1136 @@
+# Company names suggested while a customer types where they work
+# (the "Company Name" box on the website and in the app).
+#
+# One name per line. Lines starting with # are headings and are ignored.
+# To add a company, add a line anywhere and restart the server.
+# The customer can always type a name that is not in this list.
+
+# ── IT services, software & global tech centres ──
+Tata Consultancy Services (TCS)
+Infosys
+Infosys BPM
+Wipro
+HCLTech
+Tech Mahindra
+LTIMindtree
+L&T Technology Services
+Cognizant
+Accenture
+Capgemini
+IBM India
+Mphasis
+Persistent Systems
+Coforge
+Hexaware Technologies
+Birlasoft
+Cyient
+Zensar Technologies
+Sonata Software
+KPIT Technologies
+Tata Elxsi
+Tata Technologies
+Tata Communications
+Happiest Minds Technologies
+Mastek
+Newgen Software
+Intellect Design Arena
+Oracle India
+Oracle Financial Services Software
+Microsoft India
+Google India
+Amazon Development Centre India
+Amazon Web Services (AWS)
+Meta (Facebook India)
+Apple India
+Adobe India
+SAP Labs India
+Salesforce India
+Cisco Systems India
+Intel India
+Qualcomm India
+Nvidia India
+Dell Technologies
+HP India
+Hewlett Packard Enterprise (HPE)
+Lenovo India
+Samsung R&D Institute India
+Zoho Corporation
+Freshworks
+DXC Technology
+NTT Data
+Virtusa
+UST
+Atos
+Fujitsu India
+Unisys India
+Hitachi Vantara
+Kyndryl
+Nagarro
+GlobalLogic
+EPAM Systems
+Thoughtworks
+Publicis Sapient
+Sify Technologies
+Ramco Systems
+Tally Solutions
+Quick Heal Technologies
+Infogain
+Xoriant
+CGI
+Sopra Steria
+Synechron
+ValueLabs
+Cybage Software
+Incedo
+Innova Solutions
+Tredence
+Mu Sigma
+Fractal Analytics
+Tiger Analytics
+LatentView Analytics
+Quantiphi
+Ericsson India
+Nokia India
+Juniper Networks
+ServiceNow
+Atlassian
+Postman
+BrowserStack
+Chargebee
+Icertis
+CleverTap
+MoEngage
+Darwinbox
+LeadSquared
+Walmart Global Tech India
+Target India
+Lowe's India
+Optum (UnitedHealth Group)
+JPMorgan Chase India
+Goldman Sachs India
+Morgan Stanley India
+Wells Fargo India
+Bank of America (BA Continuum India)
+Barclays India
+UBS India
+BNY (BNY Mellon)
+State Street India
+Northern Trust India
+Fidelity Investments India
+American Express India
+Mastercard India
+Visa India
+Societe Generale Global Solution Centre
+NatWest Group India
+Standard Chartered GBS
+
+# ── BPO, KPO & customer support ──
+Genpact
+WNS Global Services
+EXL Service
+Concentrix
+Teleperformance India
+Firstsource Solutions
+Sutherland Global Services
+Startek (Aegis)
+Hinduja Global Solutions (HGS)
+Sagility
+iEnergizer
+Conduent
+TaskUs India
+[24]7.ai
+Tech Mahindra Business Services
+Altruist Technologies
+Conneqt Business Solutions
+Foundever (Sitel)
+Alorica India
+Cogent E Services
+Fusion CX (Fusion BPO Services)
+Movate (CSS Corp)
+Everise India
+TTEC India
+AGS Health
+Omega Healthcare
+Access Healthcare
+GeBBS Healthcare Solutions
+IKS Health
+R1 RCM India
+eClerx Services
+Datamatics Global Services
+Quatrro
+KFin Technologies
+CAMS (Computer Age Management Services)
+
+# ── Banks ──
+State Bank of India (SBI)
+HDFC Bank
+ICICI Bank
+Axis Bank
+Kotak Mahindra Bank
+IndusInd Bank
+Yes Bank
+IDFC First Bank
+Federal Bank
+RBL Bank
+Bandhan Bank
+IDBI Bank
+Punjab National Bank (PNB)
+Bank of Baroda
+Canara Bank
+Union Bank of India
+Bank of India
+Indian Bank
+Central Bank of India
+UCO Bank
+Indian Overseas Bank
+Bank of Maharashtra
+Punjab & Sind Bank
+South Indian Bank
+Karur Vysya Bank
+City Union Bank
+Karnataka Bank
+DCB Bank
+Jammu & Kashmir Bank
+Tamilnad Mercantile Bank
+CSB Bank
+Dhanlaxmi Bank
+Nainital Bank
+AU Small Finance Bank
+Ujjivan Small Finance Bank
+Equitas Small Finance Bank
+ESAF Small Finance Bank
+Jana Small Finance Bank
+Utkarsh Small Finance Bank
+Suryoday Small Finance Bank
+Capital Small Finance Bank
+Unity Small Finance Bank
+Shivalik Small Finance Bank
+Citibank India
+HSBC India
+Standard Chartered Bank
+Deutsche Bank India
+DBS Bank India
+Paytm Payments Bank
+Airtel Payments Bank
+India Post Payments Bank
+Fino Payments Bank
+Saraswat Co-operative Bank
+Cosmos Co-operative Bank
+SVC Co-operative Bank
+Reserve Bank of India (RBI)
+NABARD
+SIDBI
+
+# ── NBFC, housing finance, microfinance & broking ──
+Bajaj Finance
+Bajaj Finserv
+Bajaj Housing Finance
+HDB Financial Services
+Tata Capital
+Aditya Birla Capital
+L&T Finance
+Mahindra Finance (Mahindra & Mahindra Financial Services)
+Shriram Finance
+Cholamandalam Investment and Finance
+Sundaram Finance
+Muthoot Finance
+Muthoot Fincorp
+Manappuram Finance
+IIFL Finance
+Poonawalla Fincorp
+Piramal Finance
+Hero FinCorp
+TVS Credit Services
+SMFG India Credit (Fullerton India)
+Kotak Mahindra Prime
+Axis Finance
+Jio Financial Services
+InCred Financial Services
+DMI Finance
+Capri Global Capital
+Ugro Capital
+Northern Arc Capital
+Five-Star Business Finance
+ICICI Home Finance
+LIC Housing Finance
+PNB Housing Finance
+Can Fin Homes
+Aadhar Housing Finance
+Aavas Financiers
+Home First Finance
+Aptus Value Housing Finance
+India Shelter Finance
+Vastu Housing Finance
+Sammaan Capital (Indiabulls Housing Finance)
+CreditAccess Grameen
+Satin Creditcare Network
+Spandana Sphoorty Financial
+Fusion Finance (Fusion Micro Finance)
+Bharat Financial Inclusion
+Asirvad Micro Finance
+Annapurna Finance
+Svatantra Microfin
+Belstar Microfinance
+Power Finance Corporation (PFC)
+REC Limited
+IREDA
+HUDCO
+Indian Railway Finance Corporation (IRFC)
+Edelweiss Financial Services
+JM Financial
+Motilal Oswal Financial Services
+Anand Rathi
+Nuvama Wealth
+360 ONE (IIFL Wealth)
+Angel One
+Zerodha
+Groww
+Upstox
+5paisa
+ICICI Securities
+HDFC Securities
+Kotak Securities
+Sharekhan
+National Stock Exchange (NSE)
+BSE
+NSDL
+CDSL
+TransUnion CIBIL
+Experian India
+Equifax India
+CRIF High Mark
+CRISIL
+ICRA
+CARE Ratings
+
+# ── Insurance ──
+Life Insurance Corporation of India (LIC)
+SBI Life Insurance
+HDFC Life Insurance
+ICICI Prudential Life Insurance
+ICICI Lombard General Insurance
+Axis Max Life Insurance
+Bajaj Allianz Life Insurance
+Bajaj Allianz General Insurance
+Tata AIA Life Insurance
+Tata AIG General Insurance
+Kotak Life Insurance
+Aditya Birla Sun Life Insurance
+Aditya Birla Health Insurance
+PNB MetLife
+Canara HSBC Life Insurance
+Reliance Nippon Life Insurance
+Reliance General Insurance
+Star Health Insurance
+Niva Bupa Health Insurance
+Care Health Insurance
+ManipalCigna Health Insurance
+HDFC ERGO General Insurance
+SBI General Insurance
+Cholamandalam MS General Insurance
+IFFCO Tokio General Insurance
+Royal Sundaram General Insurance
+Go Digit General Insurance
+Acko General Insurance
+New India Assurance
+United India Insurance
+Oriental Insurance
+National Insurance Company
+General Insurance Corporation of India (GIC Re)
+Policybazaar (PB Fintech)
+InsuranceDekho
+Turtlemint
+
+# ── Fintech & payments ──
+Paytm (One97 Communications)
+PhonePe
+Google Pay
+Razorpay
+Cashfree Payments
+PayU India
+Pine Labs
+BharatPe
+MobiKwik
+CRED
+slice
+KreditBee
+Navi Technologies
+MoneyView
+Fibe (EarlySalary)
+CASHe
+Lendingkart
+Kissht
+Stashfin
+Freo (MoneyTap)
+Jupiter
+Fi Money
+Niyo
+Open Financial Technologies
+BillDesk
+CCAvenue (Infibeam Avenues)
+Juspay
+M2P Fintech
+Perfios
+National Payments Corporation of India (NPCI)
+Mswipe
+Spice Money
+PayNearby
+OfBusiness
+Hitachi Payment Services
+CMS Info Systems
+Writer Corporation
+
+# ── E-commerce, internet & startups ──
+Flipkart
+Amazon India
+Myntra
+Meesho
+Nykaa
+AJIO
+Tata CLiQ
+Snapdeal
+JioMart
+FirstCry
+Lenskart
+Purplle
+Mamaearth (Honasa Consumer)
+boAt (Imagine Marketing)
+Sugar Cosmetics
+Swiggy
+Zomato
+Blinkit
+Zepto
+BigBasket
+Licious
+Country Delight
+Ola (ANI Technologies)
+Ola Electric
+Ather Energy
+Uber India
+Rapido
+Yulu
+Zoomcar
+Urban Company
+MakeMyTrip
+Goibibo
+Yatra
+EaseMyTrip
+ixigo
+Cleartrip
+redBus
+OYO
+BookMyShow
+Dream11
+Games24x7
+Nazara Technologies
+PhysicsWallah
+Unacademy
+upGrad
+Vedantu
+BYJU'S
+Simplilearn
+Great Learning
+Scaler
+Naukri.com (Info Edge)
+MagicBricks
+Housing.com
+NoBroker
+Square Yards
+IndiaMART
+Justdial
+Udaan
+Moglix
+Infra.Market
+Zetwerk
+Cars24
+Spinny
+CarDekho
+CarTrade
+PharmEasy
+Tata 1mg
+Netmeds
+Practo
+Cult.fit
+HealthifyMe
+InMobi
+ShareChat
+Dailyhunt (VerSe Innovation)
+Pocket FM
+Ninjacart
+DeHaat
+WayCool
+Rebel Foods
+Wow! Momo
+Chaayos
+Chai Point
+Pepperfry
+Urban Ladder
+Livspace
+HomeLane
+Wakefit
+
+# ── Telecom & broadband ──
+Reliance Jio
+Bharti Airtel
+Vodafone Idea (Vi)
+BSNL (Bharat Sanchar Nigam Limited)
+MTNL
+Indus Towers
+Tata Teleservices
+Tata Play
+Dish TV
+Hathway
+Den Networks
+ACT Fibernet
+Sterlite Technologies
+HFCL
+Tejas Networks
+
+# ── Logistics, courier, aviation & transport ──
+Delhivery
+Ecom Express
+Ekart Logistics
+XpressBees
+Shadowfax
+Porter
+Shiprocket
+Blue Dart Express
+DTDC Express
+DHL Express India
+FedEx India
+Gati (Allcargo Gati)
+Safexpress
+Transport Corporation of India (TCI)
+TCI Express
+VRL Logistics
+Mahindra Logistics
+TVS Supply Chain Solutions
+Allcargo Logistics
+Container Corporation of India (CONCOR)
+BlackBuck (Zinka Logistics)
+Amazon Transportation Services
+The Professional Couriers
+Trackon Couriers
+Shree Maruti Courier
+Om Logistics
+Maersk India
+IndiGo (InterGlobe Aviation)
+Air India
+Air India Express
+SpiceJet
+Akasa Air
+Alliance Air
+Air India SATS
+GMR Airports
+Delhi International Airport (DIAL)
+Mumbai International Airport (MIAL)
+Bangalore International Airport (BIAL)
+IRCTC
+
+# ── Automobile & auto components ──
+Maruti Suzuki India
+Hyundai Motor India
+Tata Motors
+Mahindra & Mahindra (M&M)
+Honda Cars India
+Toyota Kirloskar Motor
+Kia India
+JSW MG Motor India
+Skoda Auto Volkswagen India
+Renault India
+Nissan Motor India
+Mercedes-Benz India
+BMW India
+Hero MotoCorp
+Bajaj Auto
+TVS Motor Company
+Honda Motorcycle & Scooter India (HMSI)
+Royal Enfield (Eicher Motors)
+Yamaha Motor India
+Suzuki Motorcycle India
+Ashok Leyland
+VE Commercial Vehicles
+Force Motors
+Escorts Kubota
+Sonalika Tractors (International Tractors)
+TAFE
+JCB India
+Bosch India
+Samvardhana Motherson
+Bharat Forge
+Uno Minda
+Minda Corporation
+Sona Comstar
+Endurance Technologies
+Sundram Fasteners
+Lumax Industries
+Varroc Engineering
+Schaeffler India
+SKF India
+ZF India
+Denso India
+Subros
+JBM Group
+Rane Group
+Apollo Tyres
+MRF
+CEAT
+JK Tyre & Industries
+Balkrishna Industries (BKT)
+Bridgestone India
+Exide Industries
+Amara Raja Energy & Mobility
+
+# ── Conglomerates, engineering, metals, energy & manufacturing ──
+Reliance Industries
+Reliance Infrastructure
+Reliance Power
+Tata Sons
+Tata Steel
+Tata Power
+Tata Chemicals
+Tata Projects
+Tata Consumer Products
+Tata Advanced Systems
+Tata Electronics
+Titan Company
+Larsen & Toubro (L&T)
+Adani Enterprises
+Adani Ports and SEZ
+Adani Power
+Adani Green Energy
+Adani Energy Solutions
+Adani Total Gas
+Aditya Birla Group
+Grasim Industries
+Hindalco Industries
+UltraTech Cement
+Vedanta
+Hindustan Zinc
+JSW Steel
+JSW Energy
+Jindal Steel
+Jindal Stainless
+ArcelorMittal Nippon Steel India
+ACC
+Ambuja Cements
+Shree Cement
+Dalmia Bharat
+JK Cement
+JK Lakshmi Cement
+Ramco Cements
+Nuvoco Vistas
+Godrej & Boyce
+Godrej Consumer Products
+Godrej Properties
+Godrej Agrovet
+Siemens India
+ABB India
+Schneider Electric India
+Honeywell India
+GE India
+Cummins India
+Thermax
+Kirloskar Brothers
+Kirloskar Oil Engines
+CG Power and Industrial Solutions
+Crompton Greaves Consumer Electricals
+Havells India
+Polycab India
+KEI Industries
+Finolex Cables
+Finolex Industries
+Bajaj Electricals
+Voltas
+Blue Star
+Daikin India
+Dixon Technologies
+Amber Enterprises
+Foxconn India
+Samsung India Electronics
+LG Electronics India
+Sony India
+Panasonic India
+Whirlpool of India
+Philips India
+Xiaomi India
+Oppo India
+Vivo India
+Asian Paints
+Berger Paints
+Kansai Nerolac Paints
+Pidilite Industries
+Supreme Industries
+Astral
+Kajaria Ceramics
+Somany Ceramics
+Cera Sanitaryware
+Century Plyboards
+Greenply Industries
+Saint-Gobain India
+Nilkamal
+SRF
+UPL
+PI Industries
+Deepak Nitrite
+Aarti Industries
+Gujarat Fluorochemicals
+Coromandel International
+Chambal Fertilisers
+IFFCO
+KRIBHCO
+Suzlon Energy
+ReNew
+Waaree Energies
+Torrent Power
+CESC
+Welspun
+Arvind
+Raymond
+Vardhman Textiles
+Trident
+Page Industries (Jockey)
+Shahi Exports
+Gokaldas Exports
+Bata India
+Relaxo Footwears
+Liberty Shoes
+
+# ── FMCG, food & restaurants ──
+Hindustan Unilever (HUL)
+ITC
+Nestle India
+Britannia Industries
+Dabur India
+Marico
+Emami
+Colgate-Palmolive India
+Procter & Gamble (P&G)
+Reckitt
+Patanjali Ayurved
+Amul (GCMMF)
+Mother Dairy
+Parle Products
+Parle Agro
+Haldiram's
+Bikaji Foods
+Bikanervala
+Balaji Wafers
+Mondelez India
+PepsiCo India
+Hindustan Coca-Cola Beverages
+Varun Beverages
+Bisleri International
+AWL Agri Business (Adani Wilmar)
+Jyothy Labs
+Himalaya Wellness
+Zydus Wellness
+United Spirits (Diageo India)
+United Breweries
+Radico Khaitan
+Godfrey Phillips India
+Heritage Foods
+Hatsun Agro Product
+Nandini (Karnataka Milk Federation)
+Venky's
+Jubilant FoodWorks (Domino's)
+Devyani International (KFC / Pizza Hut)
+Sapphire Foods
+McDonald's India
+Burger King India (Restaurant Brands Asia)
+Subway India
+Tata Starbucks
+Cafe Coffee Day
+Barbeque Nation
+
+# ── Retail ──
+Reliance Retail
+DMart (Avenue Supermarts)
+Trent (Westside / Zudio)
+Aditya Birla Fashion and Retail
+Pantaloons
+Shoppers Stop
+Landmark Group (Lifestyle / Max Fashion)
+V-Mart Retail
+Vishal Mega Mart
+V2 Retail
+Croma (Infiniti Retail)
+Vijay Sales
+Decathlon Sports India
+IKEA India
+H&M India
+Spencer's Retail
+More Retail
+Lulu Group India
+Apollo Pharmacy
+MedPlus
+Tanishq
+Kalyan Jewellers
+Malabar Gold & Diamonds
+Joyalukkas
+Senco Gold & Diamonds
+PC Jeweller
+CaratLane
+Arvind Fashions
+FabIndia
+Manyavar (Vedant Fashions)
+PVR INOX
+
+# ── Pharma, hospitals & diagnostics ──
+Sun Pharmaceutical Industries
+Dr. Reddy's Laboratories
+Cipla
+Lupin
+Zydus Lifesciences
+Aurobindo Pharma
+Torrent Pharmaceuticals
+Glenmark Pharmaceuticals
+Biocon
+Alkem Laboratories
+Mankind Pharma
+Divi's Laboratories
+Intas Pharmaceuticals
+Macleods Pharmaceuticals
+Micro Labs
+Ipca Laboratories
+Ajanta Pharma
+Alembic Pharmaceuticals
+Abbott India
+Pfizer India
+GSK (GlaxoSmithKline Pharmaceuticals)
+Sanofi India
+Novartis India
+AstraZeneca India
+Serum Institute of India
+Bharat Biotech
+Piramal Pharma
+Laurus Labs
+Syngene International
+Emcure Pharmaceuticals
+Wockhardt
+USV
+Apollo Hospitals
+Fortis Healthcare
+Max Healthcare
+Manipal Hospitals
+Narayana Health
+Medanta (Global Health)
+Aster DM Healthcare
+Care Hospitals
+KIMS Hospitals
+Yashoda Hospitals
+Rainbow Children's Hospital
+Cloudnine Hospitals
+Sir Ganga Ram Hospital
+Kokilaben Dhirubhai Ambani Hospital
+Lilavati Hospital
+Tata Memorial Hospital
+AIIMS (All India Institute of Medical Sciences)
+Safdarjung Hospital
+PGIMER Chandigarh
+Christian Medical College (CMC) Vellore
+Dr. Agarwal's Eye Hospital
+Sankara Nethralaya
+Dr Lal PathLabs
+Metropolis Healthcare
+Thyrocare
+Agilus Diagnostics (SRL Diagnostics)
+Vijaya Diagnostic Centre
+
+# ── Public sector companies ──
+ONGC (Oil and Natural Gas Corporation)
+Indian Oil Corporation (IOCL)
+Bharat Petroleum (BPCL)
+Hindustan Petroleum (HPCL)
+GAIL (India)
+Oil India
+NTPC
+Power Grid Corporation of India
+NHPC
+SJVN
+Coal India
+NLC India
+NMDC
+Steel Authority of India (SAIL)
+BHEL (Bharat Heavy Electricals)
+BEL (Bharat Electronics)
+HAL (Hindustan Aeronautics)
+BEML
+Bharat Dynamics
+Mazagon Dock Shipbuilders
+Cochin Shipyard
+Garden Reach Shipbuilders & Engineers
+Hindustan Copper
+NALCO
+RITES
+IRCON International
+Rail Vikas Nigam (RVNL)
+RailTel
+NBCC (India)
+Engineers India
+Electronics Corporation of India (ECIL)
+ITI Limited
+Airports Authority of India (AAI)
+National Highways Authority of India (NHAI)
+Food Corporation of India (FCI)
+Shipping Corporation of India
+Indraprastha Gas (IGL)
+Mahanagar Gas
+Gujarat Gas
+Petronet LNG
+MRPL
+Chennai Petroleum
+MSEDCL (Mahavitaran)
+UPPCL (Uttar Pradesh Power Corporation)
+BSES Rajdhani Power
+BSES Yamuna Power
+Tata Power Delhi Distribution
+BESCOM
+Tamil Nadu Electricity Board (TNEB)
+KSEB (Kerala State Electricity Board)
+PSPCL (Punjab State Power Corporation)
+WBSEDCL
+MSRTC (Maharashtra State Road Transport)
+UPSRTC (Uttar Pradesh State Road Transport)
+KSRTC
+TSRTC
+APSRTC
+BEST (Mumbai)
+
+# ── Government, defence & police ──
+Indian Railways
+Indian Army
+Indian Navy
+Indian Air Force
+Indian Coast Guard
+Central Reserve Police Force (CRPF)
+Border Security Force (BSF)
+Central Industrial Security Force (CISF)
+Indo-Tibetan Border Police (ITBP)
+Sashastra Seema Bal (SSB)
+Assam Rifles
+Railway Protection Force (RPF)
+Delhi Police
+Mumbai Police
+Kolkata Police
+Maharashtra Police
+Uttar Pradesh Police
+Haryana Police
+Punjab Police
+Rajasthan Police
+Madhya Pradesh Police
+Bihar Police
+Jharkhand Police
+Gujarat Police
+Karnataka State Police
+Tamil Nadu Police
+Telangana Police
+Andhra Pradesh Police
+Kerala Police
+West Bengal Police
+Odisha Police
+Uttarakhand Police
+India Post (Department of Posts)
+Income Tax Department
+GST & Customs Department (CBIC)
+Ministry of Defence
+Ministry of Home Affairs
+Central Public Works Department (CPWD)
+Public Works Department (PWD)
+ISRO (Indian Space Research Organisation)
+DRDO (Defence Research and Development Organisation)
+ESIC (Employees' State Insurance Corporation)
+EPFO (Employees' Provident Fund Organisation)
+Government of India
+Government of Delhi (GNCTD)
+Government of Andhra Pradesh
+Government of Arunachal Pradesh
+Government of Assam
+Government of Bihar
+Government of Chhattisgarh
+Government of Goa
+Government of Gujarat
+Government of Haryana
+Government of Himachal Pradesh
+Government of Jammu & Kashmir
+Government of Jharkhand
+Government of Karnataka
+Government of Kerala
+Government of Madhya Pradesh
+Government of Maharashtra
+Government of Manipur
+Government of Meghalaya
+Government of Mizoram
+Government of Nagaland
+Government of Odisha
+Government of Punjab
+Government of Rajasthan
+Government of Sikkim
+Government of Tamil Nadu
+Government of Telangana
+Government of Tripura
+Government of Uttar Pradesh
+Government of Uttarakhand
+Government of West Bengal
+Municipal Corporation of Delhi (MCD)
+New Delhi Municipal Council (NDMC)
+Brihanmumbai Municipal Corporation (BMC)
+Pune Municipal Corporation
+Bruhat Bengaluru Mahanagara Palike (BBMP)
+Greater Hyderabad Municipal Corporation (GHMC)
+Greater Chennai Corporation
+Kolkata Municipal Corporation
+Ahmedabad Municipal Corporation
+Delhi Metro Rail Corporation (DMRC)
+Delhi Transport Corporation (DTC)
+Delhi Jal Board
+Maha Metro
+Bangalore Metro Rail Corporation (BMRCL)
+Hyderabad Metro Rail
+Chennai Metro Rail
+Kendriya Vidyalaya Sangathan (KVS)
+Navodaya Vidyalaya Samiti
+
+# ── Education ──
+Delhi Public School (DPS)
+Ryan International School
+DAV Public School
+Podar International School
+Orchids The International School
+Kidzee (Zee Learn)
+EuroKids
+Narayana Educational Institutions
+Sri Chaitanya Educational Institutions
+Aakash Educational Services
+Allen Career Institute
+FIITJEE
+NIIT
+Aptech
+Amity University
+Lovely Professional University (LPU)
+Chandigarh University
+Manipal Academy of Higher Education
+SRM Institute of Science and Technology
+Vellore Institute of Technology (VIT)
+Symbiosis International University
+University of Delhi
+Indian Institute of Technology (IIT)
+Indian Institute of Management (IIM)
+
+# ── Staffing, security, facility & property services ──
+TeamLease Services
+Quess Corp
+Randstad India
+Adecco India
+ManpowerGroup India
+Innovsource Services
+CIEL HR Services
+SIS (Security and Intelligence Services)
+G4S Secure Solutions India
+Securitas India
+Checkmate Services
+Krystal Integrated Services
+BVG India
+Sodexo India
+Compass Group India
+ISS Facility Services India
+Updater Services (UDS)
+JLL India
+CBRE India
+Cushman & Wakefield India
+Colliers India
+Knight Frank India
+Anarock
+WeWork India
+Awfis
+
+# ── Real estate, construction & infrastructure ──
+DLF
+Lodha (Macrotech Developers)
+Prestige Estates Projects
+Brigade Enterprises
+Sobha
+Oberoi Realty
+Tata Housing
+Mahindra Lifespace Developers
+Puravankara
+Embassy Group
+K Raheja Corp
+Hiranandani Group
+M3M India
+Signature Global
+Emaar India
+Omaxe
+Phoenix Mills
+Shapoorji Pallonji
+Afcons Infrastructure
+NCC Limited
+KEC International
+Kalpataru Projects International
+Hindustan Construction Company (HCC)
+Dilip Buildcon
+IRB Infrastructure
+GMR Group
+Ashoka Buildcon
+PNC Infratech
+Megha Engineering & Infrastructures (MEIL)
+Ahluwalia Contracts
+Sterling and Wilson
+
+# ── Hotels & travel ──
+Indian Hotels Company (Taj Hotels)
+ITC Hotels
+EIH (Oberoi Hotels)
+The Leela Palaces, Hotels and Resorts
+Lemon Tree Hotels
+Marriott International India
+Hyatt India
+Radisson Hotel Group
+Accor India
+Hilton India
+Sarovar Hotels
+Royal Orchid Hotels
+Club Mahindra (Mahindra Holidays)
+Thomas Cook India
+SOTC Travel
+VFS Global
+BLS International
+
+# ── Media & entertainment ──
+Bennett Coleman & Co (The Times of India)
+HT Media (Hindustan Times)
+The Hindu Group
+Indian Express Group
+Dainik Bhaskar (DB Corp)
+Dainik Jagran (Jagran Prakashan)
+Amar Ujala
+Zee Entertainment Enterprises
+JioStar (Star India)
+Sony Pictures Networks India
+Network18
+TV Today Network (Aaj Tak / India Today)
+NDTV
+Sun TV Network
+ABP Network
+Saregama
+T-Series
+Netflix India
+Radio Mirchi (ENIL)
+Prasar Bharati (Doordarshan / All India Radio)
+
+# ── Consulting & professional services ──
+Deloitte
+EY (Ernst & Young)
+KPMG
+PwC (PricewaterhouseCoopers)
+Grant Thornton Bharat
+BDO India
+McKinsey & Company
+Boston Consulting Group (BCG)
+Bain & Company
+ZS Associates
+Gartner India
+NielsenIQ
+Kantar India
+S&P Global India
+Thomson Reuters India

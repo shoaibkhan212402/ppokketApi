@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const { pool } = require('../config/db');
 const { AWAITING_AUTO_DEBIT, raiseAutoDebits, reconcileAutoDebits, syncPendingMandates } = require('./autoPay');
+const { calculatePenalty, istToday } = require('./loanUtils');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -24,9 +25,11 @@ const sendSms = async (mobile, otp = null, message = null) => {
 const formatINR = (n) => `₹${parseFloat(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // ── JOB 1: Daily penalty calculation (runs at 00:05 every day) ────────────────
-//   Finds all EMIs that are overdue (due_date < today, status = 'upcoming')
-//   and applies a daily penalty = penalty_rate% of EMI amount per overdue day.
-//   penalty_rate is stored per loan (default 1%).
+//   Marks the EMIs of disbursed loans that are past their due date as overdue
+//   and sets each one's late penalty by the rules in Admin → Settings → Late
+//   payment (grace period, percent or flat per day, highest penalty) — see
+//   calculatePenalty in loanUtils. A loan that was approved but never
+//   disbursed has nothing to be late with, so it is left alone.
 const markOverdueAndCalcPenalty = async () => {
   const conn = await pool.getConnection();
   try {
@@ -43,6 +46,7 @@ const markOverdueAndCalcPenalty = async () => {
          SET e.status = 'overdue'
        WHERE e.status = 'upcoming'
          AND e.due_date < CURDATE()
+         AND EXISTS (SELECT 1 FROM loans l WHERE l.id = e.loan_id AND l.status = 'disbursed')
          AND NOT (${AWAITING_AUTO_DEBIT})`
     );
 
@@ -53,22 +57,20 @@ const markOverdueAndCalcPenalty = async () => {
          FROM emi_schedule e
          JOIN loans l ON l.id = e.loan_id
         WHERE e.status = 'overdue'
+          AND l.status = 'disbursed'
           AND e.penalty_waived = 0
           AND (e.paid_amount IS NULL OR e.paid_amount < e.emi_amount)`
     );
 
-    for (const emi of overdue) {
-      const daysPastDue   = Math.floor((Date.now() - new Date(emi.due_date).getTime()) / 86400000);
-      const newDays       = Math.max(daysPastDue, 0);
-      const penaltyRate   = parseFloat(emi.penalty_rate) || 1.0;
-      // penalty = (penaltyRate / 100) * emi_amount * days_overdue  (cap at 50% of EMI)
-      const rawPenalty    = (penaltyRate / 100) * parseFloat(emi.emi_amount) * newDays;
-      const cappedPenalty = Math.min(rawPenalty, parseFloat(emi.emi_amount) * 0.5);
-      const newPenalty    = Math.round(cappedPenalty * 100) / 100;
+    const [settingRows] = await conn.query('SELECT setting_key, setting_value FROM system_settings');
+    const settings = Object.fromEntries(settingRows.map((r) => [r.setting_key, r.setting_value]));
+    const today = istToday();
 
+    for (const emi of overdue) {
+      const { penalty, overdueDays } = calculatePenalty(emi, settings, today);
       await conn.query(
         `UPDATE emi_schedule SET penalty_amount = ?, penalty_days = ? WHERE id = ?`,
-        [newPenalty, newDays, emi.id]
+        [penalty, overdueDays, emi.id]
       );
     }
 
@@ -119,6 +121,7 @@ const sendEmiReminders = async () => {
               u.mobile, u.full_name, u.fcm_token
          FROM emi_schedule e
          JOIN users u ON u.id = e.user_id
+         JOIN loans l ON l.id = e.loan_id AND l.status = 'disbursed'
         WHERE e.status = 'upcoming'
           AND e.due_date = DATE_ADD(CURDATE(), INTERVAL 3 DAY)`
     );
@@ -147,13 +150,17 @@ const sendEmiReminders = async () => {
               u.id AS user_id, u.mobile, u.full_name, u.fcm_token
          FROM emi_schedule e
          JOIN users u ON u.id = e.user_id
+         JOIN loans l ON l.id = e.loan_id AND l.status = 'disbursed'
         WHERE e.status = 'overdue'
           AND DATE(e.due_date) = DATE_SUB(CURDATE(), INTERVAL 1 DAY)`
     );
 
     for (const emi of overdueToday) {
-      const total = parseFloat(emi.emi_amount) + parseFloat(emi.penalty_amount || 0);
-      const msg   = `Your EMI of ${formatINR(emi.emi_amount)} was due yesterday. Penalty of ${formatINR(emi.penalty_amount || 0)} has been added. Total due: ${formatINR(total)}. Pay now to avoid further charges. - Ppokket`;
+      const penalty = parseFloat(emi.penalty_amount || 0);
+      const total = parseFloat(emi.emi_amount) + penalty;
+      const msg   = penalty > 0
+        ? `Your EMI of ${formatINR(emi.emi_amount)} was due yesterday. Penalty of ${formatINR(penalty)} has been added. Total due: ${formatINR(total)}. Pay now to avoid further charges. - Ppokket`
+        : `Your EMI of ${formatINR(emi.emi_amount)} was due yesterday. Pay now to avoid a late payment penalty. - Ppokket`;
       if (emi.fcm_token) {
         sendNotification(emi.fcm_token, '❗ EMI Overdue', msg, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
       }

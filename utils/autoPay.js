@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { pool } = require('../config/db');
 const { sendNotification } = require('./fcm');
 const {
-  cashfreeSubscriptions, cashfreeErrorCode, cashfreeErrorMessage, autoPayMode,
+  cashfreeSubscriptions, cashfreeErrorCode, cashfreeErrorMessage, autoPayMode, autoPayIsTest,
 } = require('./paymentGateway');
 
 // Auto-Pay: a customer's e-mandate (bank_mandates) and the EMI debits raised
@@ -17,6 +17,12 @@ const {
 //      EMI payment; a failure is recorded and the customer is told to pay.
 //   3. reconcileAutoDebits() asks Cashfree about anything still pending, so a
 //      missed webhook or an interrupted request never strands a debit.
+//
+// Test mode (Auto-Pay on Cashfree's test environment — autoPayIsTest()): the
+// steps are the same, but Cashfree's sandbox has no bank to answer in step 2,
+// so step 3 gives the answer itself (answerTestDebit). No money is debited;
+// such a debit is marked "[TEST]" in the transactions and in what the
+// customer is told.
 
 // A debit can't be presented the day it is raised: Cashfree takes a schedule
 // date from tomorrow (if raised before 21:00 IST for UPI Autopay) to 14 days out.
@@ -53,7 +59,11 @@ const AUTO_DEBIT_OF_EMI = "t.loan_id = e.loan_id AND t.razorpay_order_id LIKE CO
 const AWAITING_AUTO_DEBIT = `e.due_date >= DATE_SUB(CURDATE(), INTERVAL ${AUTO_DEBIT_GRACE_DAYS} DAY)
   AND EXISTS (SELECT 1 FROM transactions t WHERE t.type = 'emi' AND t.status = 'pending' AND ${AUTO_DEBIT_OF_EMI})`;
 
+const TEST_TAG = '[TEST] ';
+const TEST_NOTICE = ' (Test mode — no money is debited from your bank.)';
+
 const notifyUser = async (userId, title, message, pushTarget) => {
+  if (autoPayIsTest()) message += TEST_NOTICE;
   await pool.query(
     'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
     [userId, title, message, 'payment']
@@ -357,7 +367,8 @@ const raiseAutoDebits = () => withJobLock(async () => {
       await pool.query(
         `INSERT INTO transactions (user_id, loan_id, razorpay_order_id, amount, type, status, description)
          VALUES (?, ?, ?, ?, 'emi', 'pending', ?)`,
-        [emi.user_id, emi.loan_id, orderId, emi.emi_amount, `Automatic EMI payment (Installment #${emi.installment_no})`]
+        [emi.user_id, emi.loan_id, orderId, emi.emi_amount,
+          `${autoPayIsTest() ? TEST_TAG : ''}Automatic EMI payment (Installment #${emi.installment_no})`]
       );
 
       if (isMockMandate) {
@@ -383,6 +394,24 @@ const raiseAutoDebits = () => withJobLock(async () => {
   }
 });
 
+// Test mode only. Cashfree's sandbox has no bank behind it: a debit that has
+// reached its day just waits there (PENDING) for ever. So this server answers
+// for the bank — "paid" — and the EMI then settles through the same path as a
+// real debit. `payment` is the debit as Cashfree has it; resolves to how it
+// stands afterwards.
+const TEST_ANSWER_WAIT_MS = 3000;
+const answerTestDebit = async (debit, payment) => {
+  const dueOn = String(payment.payment_schedule_date || '').slice(0, 10);
+  if (String(payment.payment_status).toUpperCase() !== 'PENDING' || !dueOn || dueOn > istDate()) return payment;
+
+  await cashfreeSubscriptions.simulatePayment(debit.order_id, 'SUCCESS');
+  console.log(`[autoPay] TEST MODE: answered debit ${debit.order_id} as paid — no money was collected.`);
+  // The sandbox takes a moment to show the result. If it isn't there yet, the
+  // next run (or the webhook) records it.
+  await new Promise((resolve) => setTimeout(resolve, TEST_ANSWER_WAIT_MS));
+  return (await cashfreeSubscriptions.fetchPayment(debit.subscription_id, debit.order_id)) || payment;
+};
+
 // Asks Cashfree about every auto-debit still pending and applies what it says.
 const reconcileAutoDebits = () => withJobLock(async () => {
   if (autoPayMode() !== 'live') return;
@@ -401,9 +430,10 @@ const reconcileAutoDebits = () => withJobLock(async () => {
   for (const debit of pending) {
     try {
       const hasLiveMandate = debit.subscription_id && debit.payment_mode !== 'mock';
-      const payment = hasLiveMandate
+      let payment = hasLiveMandate
         ? await cashfreeSubscriptions.fetchPayment(debit.subscription_id, debit.order_id)
         : null;
+      if (payment && autoPayIsTest()) payment = await answerTestDebit(debit, payment);
       if (payment) {
         await recordChargeResult(debit.order_id, payment);
         continue;

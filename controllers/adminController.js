@@ -1,19 +1,35 @@
-const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('../config/db');
 const { sendNotification, sendMulticast } = require('../utils/fcm');
-const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
+const {
+  calculateEMI, generateEMISchedule, defaultFirstEmiDate, addMonths, istToday, istDateOf, settingNumber,
+} = require('../utils/loanUtils');
+const { maskAadhaar, maskAccount, cleanBankReference } = require('../utils/helpers');
 const {
   loadChargeContext, loadVersionsLocked, chargesAsOf, chargesForLoan, disbursalCharges, loanChargeSummary,
-  attachLoanCharges, attachEmiCharges,
+  attachLoanCharges, attachEmiCharges, ensureEmiChargeItemsTable, storeEmiChargeItems,
 } = require('../utils/loanCharges');
 const { getEmployment, attachEmployment, withoutDocument } = require('../utils/employment');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { getUserCreditDetails } = require('./userController');
 const { isRefusedPassword } = require('./authController');
+
+// Aadhaar numbers are shown in full to the super admin only: every other
+// admin is sent just the last four digits. DSA / bank partners are sent bank
+// account numbers the same way (staff who send payouts need them whole).
+const hideIdNumbers = (admin, rows) => {
+  if (admin?.role === 'super_admin') return rows;
+  const isPartner = ['dsa_partner', 'bank_partner'].includes(admin?.role);
+  for (const row of rows) {
+    if (!row) continue;
+    if (row.aadhaar_number) row.aadhaar_number = maskAadhaar(String(row.aadhaar_number));
+    if (isPartner && row.account_number) row.account_number = maskAccount(row.account_number);
+  }
+  return rows;
+};
 
 // A password adminLogin refuses on this server: an account given it could never sign in.
 const UNUSABLE_PASSWORD_MESSAGE = 'That password cannot be used. Please choose a different one.';
@@ -156,6 +172,7 @@ const getAllUsers = async (req, res) => {
     // letter). Partners are told the offer letter exists, not given the file.
     await attachEmployment(users);
     if (isPartner) for (const user of users) user.employment = withoutDocument(user.employment);
+    hideIdNumbers(req.admin, users);
 
     let countQuery = 'SELECT COUNT(*) as total FROM users WHERE (full_name LIKE ? OR mobile LIKE ? OR email LIKE ?)';
     const countParams = [searchParam, searchParam, searchParam];
@@ -231,6 +248,7 @@ const getLeadKycDetails = async (req, res) => {
     if (!kyc) return res.status(404).json({ success: false, message: 'User not found' });
     // Like the documents above: whether an offer letter was given, not the file
     kyc.employment = withoutDocument(await getEmployment(userId));
+    hideIdNumbers(req.admin, [kyc]);
     res.json({ success: true, kyc });
   } catch (err) {
     console.error('[getLeadKycDetails]', err);
@@ -249,10 +267,13 @@ const getAllLoans = async (req, res) => {
       SELECT l.*, UNIX_TIMESTAMP(l.approved_at) AS approved_ts, u.full_name, u.mobile, u.email,
              COALESCE(u.credit_score, u.experian_score) AS credit_score,
              u.occupation, u.monthly_income,
+             bd.account_holder AS payout_account_holder, bd.account_number AS payout_account_number,
+             bd.ifsc_code AS payout_ifsc, bd.bank_name AS payout_bank_name,
              (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
              (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date
       FROM loans l
       JOIN users u ON u.id = l.user_id
+      LEFT JOIN bank_details bd ON bd.user_id = l.user_id
     `;
     const conditions = [];
     const params = [];
@@ -282,7 +303,13 @@ const getAllLoans = async (req, res) => {
     attachLoanCharges(loans, await loadChargeContext());
     // Where the borrower works
     await attachEmployment(loans, 'user_id');
-    if (isPartner) for (const loan of loans) loan.employment = withoutDocument(loan.employment);
+    if (isPartner) {
+      for (const loan of loans) {
+        loan.employment = withoutDocument(loan.employment);
+        // The bank account a payout goes to is for the staff who send it
+        delete loan.payout_account_holder; delete loan.payout_account_number; delete loan.payout_ifsc; delete loan.payout_bank_name;
+      }
+    }
     res.json({ success: true, loans });
   } catch (err) {
     console.error('[getAllLoans]', err);
@@ -310,12 +337,12 @@ const previewEMI = async (req, res) => {
     // Resolve processing fee
     const feePct = processing_fee_pct !== undefined
       ? parseFloat(processing_fee_pct)
-      : parseFloat(sysSettings.processing_fee_pct) || 2;
+      : settingNumber(sysSettings.processing_fee_pct, 2);
     const procFee = processing_fee !== undefined
       ? parseFloat(processing_fee)
       : Math.round(p * feePct / 100 * 100) / 100;
 
-    const gstOnFee = Math.round(procFee * (parseFloat(sysSettings.gst_on_processing_fee) || 18) / 100 * 100) / 100;
+    const gstOnFee = Math.round(procFee * settingNumber(sysSettings.gst_on_processing_fee, 18) / 100 * 100) / 100;
 
     // Merge first_emi_pct override into settings
     const mergedSettings = {
@@ -354,7 +381,7 @@ const previewEMI = async (req, res) => {
       first_emi_pct: parseFloat(mergedSettings.first_emi_principal_pct) || 0,
       is_step_down: isStepDown,
       processing_fee_in_first_emi: !!sysSettings.processing_fee_in_first_emi,
-      penalty_grace_days: sysSettings.penalty_grace_days || 3,
+      penalty_grace_days: settingNumber(sysSettings.penalty_grace_days, 3),
       penalty_type: sysSettings.penalty_type || 'percent',
       penalty_rate_per_day: sysSettings.penalty_rate_per_day || 1,
       penalty_flat_per_day: sysSettings.penalty_flat_per_day || 50,
@@ -394,6 +421,10 @@ const processLoan = async (req, res) => {
     // Load global settings + user's custom rates
     const sysSettings = await loadSettings();
 
+    // Where each instalment's charge break-up is stored. Made sure of here,
+    // ahead of the transaction: creating a table would commit it.
+    await ensureEmiChargeItemsTable();
+
     await conn.beginTransaction();
 
     const [loanRows] = await conn.query('SELECT l.*, u.custom_processing_fee_pct, u.custom_first_emi_pct FROM loans l JOIN users u ON u.id = l.user_id WHERE l.id = ? FOR UPDATE', [loanId]);
@@ -414,7 +445,7 @@ const processLoan = async (req, res) => {
 
     const bodyFeePct = processing_fee_pct !== undefined ? parseFloat(processing_fee_pct) : null;
     const userFeePct = loan.custom_processing_fee_pct != null ? parseFloat(loan.custom_processing_fee_pct) : null;
-    const resolvedFeePct = bodyFeePct ?? userFeePct ?? parseFloat(sysSettings.processing_fee_pct) ?? 2;
+    const resolvedFeePct = bodyFeePct ?? userFeePct ?? settingNumber(sysSettings.processing_fee_pct, 2);
     const finalProcFee = processing_fee !== undefined
       ? parseFloat(processing_fee)
       : Math.round(finalAmount * resolvedFeePct / 100 * 100) / 100;
@@ -422,7 +453,7 @@ const processLoan = async (req, res) => {
     // first_emi_pct: from request body → user's custom → global setting
     const bodyFirstEmiPct = req.body.first_emi_pct !== undefined ? parseFloat(req.body.first_emi_pct) : null;
     const userFirstEmiPct = loan.custom_first_emi_pct != null ? parseFloat(loan.custom_first_emi_pct) : null;
-    const resolvedFirstEmiPct = bodyFirstEmiPct ?? userFirstEmiPct ?? parseFloat(sysSettings.first_emi_principal_pct) ?? 0;
+    const resolvedFirstEmiPct = bodyFirstEmiPct ?? userFirstEmiPct ?? settingNumber(sysSettings.first_emi_principal_pct, 0);
 
     const mergedSettings = { ...sysSettings, first_emi_principal_pct: resolvedFirstEmiPct };
 
@@ -496,6 +527,9 @@ const processLoan = async (req, res) => {
         [rows]
       );
     }
+    // What every instalment was charged, charge by charge (Post Service Fee,
+    // Tech Fee, GST …), kept with the schedule it belongs to
+    await storeEmiChargeItems(conn, loanId, schedule);
 
     // Update next_emi_date to first EMI due date
     if (schedule.length) {
@@ -684,6 +718,7 @@ const getPendingKYC = async (req, res) => {
     const [kycs] = await pool.query(query, params);
     // Where each applicant works, with the offer letter if they gave one
     await attachEmployment(kycs, 'user_id');
+    hideIdNumbers(req.admin, kycs);
     res.json({ success: true, kycs });
   } catch (err) {
     console.error('[getPendingKYC]', err);
@@ -719,8 +754,8 @@ const reviewKYC = async (req, res) => {
 
       // ── Compute EMI snapshot at KYC approval time ──────────────────────────
       const sysSettings = await loadSettings();
-      const resolvedFeePct = feePct ?? parseFloat(sysSettings.processing_fee_pct) ?? 2;
-      const resolvedFirstEmiPct = firstEmiP ?? parseFloat(sysSettings.first_emi_principal_pct) ?? 0;
+      const resolvedFeePct = feePct ?? settingNumber(sysSettings.processing_fee_pct, 2);
+      const resolvedFirstEmiPct = firstEmiP ?? settingNumber(sysSettings.first_emi_principal_pct, 0);
       const procFee = Math.round(limitVal * resolvedFeePct / 100 * 100) / 100;
 
       const mergedSettings = {
@@ -865,13 +900,59 @@ const sendBulkNotification = async (req, res) => {
   }
 };
 
-// PUT /api/admin/disburse-loan/:id
+// A loan's EMI dates are set when it is approved, counted from that day. The
+// money is often sent later (the customer first sets up Auto-Pay and accepts
+// the agreement), so on disbursal the same rule (Admin → Settings → EMI due
+// date) is applied to the day the money is actually sent, and the instalments
+// move to it — a customer is never asked for an EMI before, or days after,
+// receiving the loan. Dates the admin picked by hand at approval are kept, and
+// nothing moves once an instalment has been paid. Any "overdue" mark or
+// penalty picked up while the loan was still waiting is cleared.
+// Resolves to the first due date as it now stands (null without a schedule).
+const alignScheduleToDisbursal = async (conn, loan, settings) => {
+  const [emis] = await conn.query(
+    'SELECT id, installment_no, due_date, status FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
+    [loan.id]
+  );
+  if (!emis.length) return null;
+  const firstDue = String(emis[0].due_date).slice(0, 10);
+  if (loan.approved_ts == null || emis.some((e) => e.status === 'paid')) return firstDue;
+
+  const asApproved = defaultFirstEmiDate(settings, istDateOf(loan.approved_ts));
+  const asDisbursed = defaultFirstEmiDate(settings, istToday());
+  if (firstDue !== asApproved || asDisbursed === firstDue) return firstDue;
+
+  for (const emi of emis) {
+    await conn.query(
+      "UPDATE emi_schedule SET due_date = ?, status = 'upcoming', penalty_amount = 0, penalty_days = 0 WHERE id = ?",
+      [addMonths(asDisbursed, emi.installment_no - emis[0].installment_no), emi.id]
+    );
+  }
+  await conn.query('UPDATE loans SET next_emi_date = ? WHERE id = ?', [asDisbursed, loan.id]);
+  return asDisbursed;
+};
+
+// PUT /api/admin/disburse-loan/:id   { utr }
+// Records that the admin has sent the money. `utr` is the bank's reference
+// for that transfer; the customer is shown it, so it has to be the real one.
 const disburseLoan = async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const loanId = req.params.id;
 
+    const utr = cleanBankReference(req.body?.utr);
+    if (!utr) {
+      conn.release();
+      return res.status(400).json({ success: false, message: 'Enter the bank reference (UTR) of the transfer you made to the customer.' });
+    }
+
     await conn.beginTransaction();
+
+    const [used] = await conn.query('SELECT id FROM transactions WHERE receipt_url = ? LIMIT 1', [`UTR: ${utr}`]);
+    if (used.length) {
+      await conn.rollback(); conn.release();
+      return res.status(409).json({ success: false, message: 'This bank reference is already recorded for another payout. Please check it.' });
+    }
 
     // Lock the loan row to prevent concurrent disbursals
     const [loanRows] = await conn.query(
@@ -916,15 +997,15 @@ const disburseLoan = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Disbursement failed: User has not updated bank details.' });
     }
 
+    const [settingsRows] = await conn.query('SELECT setting_key, setting_value FROM system_settings');
+    const settings = {};
+    for (const r of settingsRows) {
+      settings[r.setting_key] = r.setting_value;
+    }
+
     let payoutAmount = parseFloat(loan.amount);
     let feeDeductionMsg = '';
     if (!loan.processing_fee_in_first_emi) {
-      // Get system settings for GST
-      const [settingsRows] = await conn.query('SELECT setting_key, setting_value FROM system_settings');
-      const settings = {};
-      for (const r of settingsRows) {
-        settings[r.setting_key] = r.setting_value;
-      }
       const gstPct = parseFloat(settings.gst_on_processing_fee || 18);
       const procFee = parseFloat(loan.processing_fee || 0);
       const feeGst = Math.round(procFee * (gstPct / 100) * 100) / 100;
@@ -944,13 +1025,16 @@ const disburseLoan = async (req, res) => {
       feeDeductionMsg += itemised.length <= 250 ? itemised : ` (₹${disbursalExtras.total} other charges deducted)`;
     }
 
-    const mockUTR = 'PAYOUT' + crypto.randomBytes(6).toString('hex').toUpperCase();
-
     // All three writes are atomic — if any fails, the whole transaction rolls back
     await conn.query(
       "UPDATE loans SET status = 'disbursed', disbursed_at = NOW(), disburse_confirmed = 1 WHERE id = ?",
       [loanId]
     );
+
+    const firstDue = await alignScheduleToDisbursal(conn, loan, settings);
+    const firstDueMsg = firstDue
+      ? ` First EMI due on ${new Date(`${firstDue}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' })}.`
+      : '';
 
     await conn.query(
       'UPDATE users SET wallet_balance = wallet_balance + ? WHERE id = ?',
@@ -963,14 +1047,14 @@ const disburseLoan = async (req, res) => {
       [
         userId, loanId, payoutAmount,
         `Loan disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}${feeDeductionMsg}`,
-        `UTR: ${mockUTR}`,
+        `UTR: ${utr}`,
       ]
     );
 
     await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [userId, '💰 Loan Disbursed!',
-        `₹${payoutAmount} disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}. UTR: ${mockUTR}.${feeDeductionMsg}`,
+        `₹${payoutAmount} disbursed to ${bank[0].bank_name} A/C ****${bank[0].account_number.slice(-4)}. Bank reference (UTR): ${utr}.${feeDeductionMsg}${firstDueMsg}`,
         'loan']
     );
 
@@ -983,7 +1067,7 @@ const disburseLoan = async (req, res) => {
       action: 'loan_disbursed',
       entityType: 'loan',
       entityId: loanId,
-      details: { amount: payoutAmount, utr: mockUTR, bank: bank[0].bank_name, transaction_id: txResult.insertId },
+      details: { amount: payoutAmount, utr, bank: bank[0].bank_name, first_emi: firstDue, transaction_id: txResult.insertId },
     });
 
     // Push notification (non-blocking)
@@ -996,7 +1080,7 @@ const disburseLoan = async (req, res) => {
 
     await Promise.all([invalidateUserCache(userId), delCache('admin:dashboard', 'admin:dashboard:partner:*')]);
 
-    res.json({ success: true, message: 'Loan disbursed successfully', utr: mockUTR, bank: bank[0].bank_name });
+    res.json({ success: true, message: 'Loan disbursed successfully', utr, bank: bank[0].bank_name, first_emi_date: firstDue });
   } catch (err) {
     try { await conn.rollback(); } catch (_) { }
     conn.release();
@@ -1020,7 +1104,7 @@ const getLoanEMISchedule = async (req, res) => {
         'SELECT status, processing_fee_in_first_emi, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE id = ?',
         [loanId]
       );
-      const rows = loanRow ? attachEmiCharges(schedule, loanRow, await loadChargeContext()) : schedule;
+      const rows = loanRow ? await attachEmiCharges(schedule, loanRow, await loadChargeContext()) : schedule;
       return res.json({ success: true, emi_schedule: rows });
     }
 
@@ -1030,7 +1114,9 @@ const getLoanEMISchedule = async (req, res) => {
       return res.json({ success: true, emi_schedule: [] });
     }
 
-    const preview = generateEMISchedule(loan[0]);
+    // Due dates as an approval today would set them (Admin → Settings → EMI due date)
+    const { emi_due_mode, emi_due_day } = await loadSettings();
+    const preview = generateEMISchedule(loan[0], null, { emi_due_mode, emi_due_day });
     const mappedPreview = preview.map(inst => ({
       id: `preview-${inst.installment_no}`,
       loan_id: loanId,
@@ -1352,10 +1438,21 @@ const updateSystemSettings = async (req, res) => {
       'first_emi_principal_pct', 'first_emi_extra_pct', 'penalty_grace_days', 'penalty_type', 'penalty_rate_per_day',
       'penalty_flat_per_day', 'penalty_max_pct_of_emi', 'gst_on_penalty', 'bounce_charge',
       'gst_on_bounce', 'min_cibil_score',
+      'emi_due_mode', 'emi_due_day',
       'investment_monthly_rate', 'investment_min_amount', 'investment_max_amount',
       'investment_min_tenure_months', 'investment_max_tenure_months',
     ];
     const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
+
+    // These two decide real due dates (utils/loanUtils.js), so they are checked
+    const due = Object.fromEntries(updates);
+    if ('emi_due_mode' in due && !['fixed_day', 'loan_date'].includes(due.emi_due_mode)) {
+      return res.status(400).json({ success: false, message: 'Choose how the EMI due date is set: a fixed day, or the date of the loan' });
+    }
+    if ('emi_due_day' in due && !(Number.isInteger(Number(due.emi_due_day)) && Number(due.emi_due_day) >= 1 && Number(due.emi_due_day) <= 28)) {
+      return res.status(400).json({ success: false, message: 'The EMI due day must be between 1 and 28' });
+    }
+
     for (const [k, v] of updates) {
       await pool.query(
         'INSERT INTO system_settings (setting_key,setting_value) VALUES (?,?) ON DUPLICATE KEY UPDATE setting_value=?',

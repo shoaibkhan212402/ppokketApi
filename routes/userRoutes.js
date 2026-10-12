@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getProfile, updateProfile, uploadOfferLetter, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead } = require('../controllers/userController');
+const { getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead } = require('../controllers/userController');
 const { protect } = require('../middleware/auth');
 const upload = require('../middleware/upload');
 
@@ -21,6 +21,8 @@ const handleOfferLetterUpload = (req, res, next) => {
 router.get('/profile', protect, getProfile);
 router.put('/update', protect, updateProfile);
 router.post('/offer-letter', protect, handleOfferLetterUpload, uploadOfferLetter);
+// Suggestions for the "Company Name" box — open, so the sign-up form can use it too
+router.get('/companies', getCompanies);
 router.put('/bank-details', protect, updateBankDetails);
 router.post('/bank-verify', protect, verifyBankDetails);
 router.get('/dashboard', protect, getDashboard);

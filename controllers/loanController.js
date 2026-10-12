@@ -1,5 +1,5 @@
 const { pool } = require('../config/db');
-const { calculateEMI, generateEMISchedule } = require('../utils/loanUtils');
+const { calculateEMI, generateEMISchedule, settingNumber } = require('../utils/loanUtils');
 const { loadChargeContext, chargesAsOf, loanChargeSummary, attachLoanCharges, attachEmiCharges } = require('../utils/loanCharges');
 const { sendNotification } = require('../utils/fcm');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
@@ -76,14 +76,14 @@ const applyLoan = async (req, res) => {
     
     // Resolve user's custom processing fee % or fallback to global settings
     const userFeePct = user.custom_processing_fee_pct != null ? parseFloat(user.custom_processing_fee_pct) : null;
-    const feePct = userFeePct ?? parseFloat(settings.processing_fee_pct) ?? 2;
+    const feePct = userFeePct ?? settingNumber(settings.processing_fee_pct, 2);
     const processing_fee = Math.round(amount * feePct / 100);
 
     const emi_amount = calculateEMI(amount, interest_rate, duration_months);
 
     // Resolve user's custom first EMI collection % or fallback to global settings
     const userFirstEmiPct = user.custom_first_emi_pct != null ? parseFloat(user.custom_first_emi_pct) : null;
-    const resolvedFirstEmiPct = userFirstEmiPct ?? parseFloat(settings.first_emi_principal_pct) ?? 0;
+    const resolvedFirstEmiPct = userFirstEmiPct ?? settingNumber(settings.first_emi_principal_pct, 0);
 
     const mergedSettings = {
       ...settings,
@@ -193,7 +193,7 @@ const getLoanDetails = async (req, res) => {
         'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no',
         [req.params.id]
       );
-      emiSchedule = attachEmiCharges(rows, loan[0], chargeCtx);
+      emiSchedule = await attachEmiCharges(rows, loan[0], chargeCtx);
     }
     const [transactions] = await pool.query(
       'SELECT * FROM transactions WHERE loan_id = ? ORDER BY created_at DESC',
@@ -257,13 +257,13 @@ const emiCalculator = async (req, res) => {
     const months = parseInt(duration_months) || 6;
 
     // Resolve processing fee (user's custom or global setting)
-    const feePct = userFeePct ?? parseFloat(settings.processing_fee_pct) ?? 2;
+    const feePct = userFeePct ?? settingNumber(settings.processing_fee_pct, 2);
     const processing_fee = Math.round(principal * feePct / 100);
 
     const emi = calculateEMI(principal, rateVal, months);
 
     // Resolve first EMI principal pct (user's custom or global setting)
-    const resolvedFirstEmiPct = userFirstEmiPct ?? parseFloat(settings.first_emi_principal_pct) ?? 0;
+    const resolvedFirstEmiPct = userFirstEmiPct ?? settingNumber(settings.first_emi_principal_pct, 0);
     
     const mergedSettings = {
       ...settings,
@@ -332,7 +332,7 @@ const getEmiSchedule = async (req, res) => {
         [loanId]
       );
       // Each instalment also says how much of it is charges, and which ones
-      schedule = attachEmiCharges(rows, loan[0], await loadChargeContext());
+      schedule = await attachEmiCharges(rows, loan[0], await loadChargeContext());
     }
 
     res.json({ success: true, schedule });

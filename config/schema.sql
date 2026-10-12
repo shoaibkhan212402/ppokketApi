@@ -442,6 +442,25 @@ CREATE TABLE IF NOT EXISTS user_employment (
   updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- EMI CHARGE ITEMS (what each instalment was charged on top of principal and
+-- interest, charge by charge — Post Service Fee, Tech Fee, GST … — stored when
+-- a loan is approved and its EMI schedule is created). The server creates this
+-- table by itself the first time a loan is approved (utils/loanCharges.js), so
+-- on an existing database it never has to be run by hand.
+CREATE TABLE IF NOT EXISTS emi_charge_items (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  loan_id        INT NOT NULL,
+  installment_no INT NOT NULL,
+  charge_id      VARCHAR(16) NOT NULL,
+  name           VARCHAR(40) NOT NULL,
+  type           VARCHAR(10) NOT NULL,           -- flat | percent
+  value          DECIMAL(12,2) NOT NULL,         -- the rupees or percentage that was set
+  percent_of     VARCHAR(10) NOT NULL,           -- amount (the instalment) | charges (the other charges)
+  amount         DECIMAL(12,2) NOT NULL,         -- what this instalment was charged
+  created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_emi_charge_items_loan (loan_id, installment_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- INDEXES
 CREATE INDEX idx_users_mobile           ON users(mobile);
 CREATE INDEX idx_users_is_dsa_partner   ON users(is_dsa_partner);

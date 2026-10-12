@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pool } = require('../config/db');
 const { generateEMISchedule } = require('./loanUtils');
-const { loadChargeContext, chargesForLoan, disbursalCharges } = require('./loanCharges');
+const { loadChargeContext, chargesForLoan, disbursalCharges, plainCharges } = require('./loanCharges');
 
 // Helper to format currency
 const formatINR = (n) => `INR ${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -192,8 +192,16 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
     );
     const loanCharges = chargesForLoan(await loadChargeContext(), { ...loan, ...loanMeta });
     const disbursalExtras = disbursalCharges(loanCharges, loan.amount);
-    const emiExtras = loanCharges.filter((c) => c.applies_to === 'emi');
+    const emiExtras = plainCharges(loanCharges).filter((c) => c.applies_to === 'emi');
     const emiExtraText = (c) => (c.type === 'percent' ? `${c.value}% of each instalment` : `${formatINR(c.value)} with each instalment`);
+
+    // The instalment dates are the ones fixed when the loan was approved, not
+    // ones worked out again on the day the agreement happens to be written
+    const [[firstEmi]] = await pool.query(
+      'SELECT due_date FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC LIMIT 1',
+      [loan.id]
+    );
+    const firstEmiDate = firstEmi?.due_date ? String(firstEmi.due_date).slice(0, 10) : null;
 
     // Generate dynamic schedule rows
     const scheduleRows = generateEMISchedule(
@@ -204,7 +212,7 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
         emi_amount: loan.emi_amount,
         processing_fee: loan.processing_fee
       },
-      null,
+      firstEmiDate,
       settings,
       loanCharges
     );

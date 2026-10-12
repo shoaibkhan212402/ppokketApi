@@ -7,7 +7,7 @@ const {
   GATEWAYS, GATEWAY_NAMES,
   isConfigured, describeGateway, isAuthError, gatewayMode, mockPaymentsAllowed, toRupees,
   getSelectedGateway, setSelectedGateway, pickGatewayForOrder, gatewayOfOrder,
-  cashfree, razorpay, clients,
+  cashfree, razorpay, clients, describeAutoPay,
 } = require('../utils/paymentGateway');
 const { isAutoDebitOrder, cancelScheduledAutoDebits, refundAutoDebit } = require('../utils/autoPay');
 const { loadChargeContext, attachEmiCharges } = require('../utils/loanCharges');
@@ -97,7 +97,7 @@ const createOrder = async (req, res) => {
         // record and the pay screen. It never changes what is charged, and a
         // failure here must not stop a payment.
         try {
-          const [priced] = attachEmiCharges([emi], loan, await loadChargeContext());
+          const [priced] = await attachEmiCharges([emi], loan, await loadChargeContext());
           if (priced.charges_amount > 0) {
             const note = ` (incl. ${priced.charge_items.map((c) => `₹${c.amount} ${c.name}`).join(', ')})`;
             descriptionText += note.length <= 250 ? note : ` (incl. ₹${priced.charges_amount} charges)`;
@@ -772,6 +772,7 @@ const getGatewayConfig = async (req, res) => {
       success: true,
       active: await getSelectedGateway(),
       gateways: GATEWAYS.map(describeGateway),
+      auto_pay: describeAutoPay(),
     });
   } catch (err) {
     console.error('[getGatewayConfig]', err);
@@ -815,6 +816,7 @@ const setGateway = async (req, res) => {
       message: `Payments will now be collected through ${name}.`,
       active: gateway,
       gateways: GATEWAYS.map(describeGateway),
+      auto_pay: describeAutoPay(),
     });
   } catch (err) {
     console.error('[setGateway]', err);

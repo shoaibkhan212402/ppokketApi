@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { pool } = require('../config/db');
 const {
-  cashfree, cashfreeSubscriptions, cashfreeErrorCode, autoPayMode,
+  cashfreeSubscriptions, cashfreeErrorCode, autoPayGateway, autoPayMode, autoPayIsTest,
 } = require('../utils/paymentGateway');
 const {
   CHARGEABLE_AT_GATEWAY, findMandate, syncMandate, retireMockMandate, handleSubscriptionEvent,
@@ -29,7 +29,8 @@ const frontendUrl = (req) => req?.headers?.origin || process.env.FRONTEND_URL ||
 // served over https, so with live keys the address is always given as https.
 const apiUrl = (req) => {
   const base = process.env.API_PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
-  return process.env.CASHFREE_ENV === 'production' ? base.replace(/^http:\/\//i, 'https://') : base;
+  const liveKeys = process.env.CASHFREE_ENV === 'production' || autoPayGateway().env === 'production';
+  return liveKeys ? base.replace(/^http:\/\//i, 'https://') : base;
 };
 
 const SETUP_AGAIN = 'Your previous Auto-Pay setup can no longer be used. Please set up Auto-Pay again.';
@@ -225,7 +226,7 @@ const getMandateSession = async (req, res) => {
         success: true,
         state: 'authorize',
         subscription_session_id: subscription.subscription_session_id,
-        cashfree_env: process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox',
+        cashfree_env: autoPayGateway().env,
       });
     }
 
@@ -415,7 +416,9 @@ const getMandateStatus = async (req, res) => {
         ifsc_code:      bank.ifsc_code,
         account_type:   bank.account_type,
       } : null,
-      mandate: mandate
+      mandate: mandate,
+      // Auto-Pay is on Cashfree's test environment: nothing is really debited
+      test_mode: autoPayIsTest(),
     });
   } catch (err) {
     console.error('[getMandateStatus]', err);
@@ -480,14 +483,14 @@ const handleSubscriptionWebhook = async (req, res) => {
     const signature = req.headers['x-webhook-signature'];
     const timestamp = req.headers['x-webhook-timestamp'];
 
-    if (!process.env.CASHFREE_SECRET_KEY) {
-      console.error('[handleSubscriptionWebhook] CASHFREE_SECRET_KEY not configured — rejecting webhook.');
+    if (!autoPayGateway().secretKey) {
+      console.error('[handleSubscriptionWebhook] Cashfree secret key not configured — rejecting webhook.');
       return res.status(500).json({ success: false, message: 'Webhook not configured' });
     }
     if (!signature || !timestamp) {
       return res.status(400).json({ success: false, message: 'Missing webhook signature headers' });
     }
-    if (!cashfree.verifyWebhookSignature(req.rawBody || JSON.stringify(req.body), timestamp, signature)) {
+    if (!cashfreeSubscriptions.verifyWebhookSignature(req.rawBody || JSON.stringify(req.body), timestamp, signature)) {
       console.error('[handleSubscriptionWebhook] Invalid Cashfree webhook signature');
       return res.status(400).json({ success: false, message: 'Invalid webhook signature' });
     }

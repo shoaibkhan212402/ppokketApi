@@ -6,7 +6,8 @@ const { pool } = require('../config/db');
 // through either gateway; the admin picks which one in Settings → Payment
 // Gateway (system_settings.payment_gateway). Auto-debit mandates are not part
 // of this switch — they are always Cashfree subscriptions (cashfreeSubscriptions
-// below, driven by utils/autoPay.js and mandateController).
+// below, driven by utils/autoPay.js and mandateController), and can run on a
+// Cashfree key pair of their own (autoPayGateway).
 const GATEWAYS = ['cashfree', 'razorpay'];
 const GATEWAY_NAMES = { cashfree: 'Cashfree', razorpay: 'Razorpay' };
 const DEFAULT_GATEWAY = 'cashfree';
@@ -109,6 +110,16 @@ const cashfreeConfig = () => ({
   },
 });
 
+// Cashfree signs every webhook — payments and subscriptions alike — with
+// base64(HMAC-SHA256(timestamp + rawBody, secret key)).
+const isCashfreeSignature = (secretKey, rawBody, timestamp, signature) => {
+  const expected = crypto
+    .createHmac('sha256', secretKey || '')
+    .update(String(timestamp) + rawBody)
+    .digest('base64');
+  return safeEqual(expected, signature);
+};
+
 const cashfree = {
   // Returns { orderId, checkout } — `checkout` is what the client needs to open the payment page.
   async createOrder({ reference, amount, customer, returnUrl }) {
@@ -161,14 +172,9 @@ const cashfree = {
     }
   },
 
-  // Cashfree signs every webhook — payments and subscriptions alike — with
-  // base64(HMAC-SHA256(timestamp + rawBody, secret key)).
+  // A payment webhook, signed with the keys payments are collected on.
   verifyWebhookSignature(rawBody, timestamp, signature) {
-    const expected = crypto
-      .createHmac('sha256', process.env.CASHFREE_SECRET_KEY || '')
-      .update(String(timestamp) + rawBody)
-      .digest('base64');
-    return safeEqual(expected, signature);
+    return isCashfreeSignature(process.env.CASHFREE_SECRET_KEY, rawBody, timestamp, signature);
   },
 };
 
@@ -183,9 +189,40 @@ const AUTOPAY_METHODS = ['enach', 'upi'];
 const AUTOPAY_VALIDITY_YEARS = 10;
 const BANK_ACCOUNT_TYPES = ['SAVINGS', 'CURRENT'];
 
+// The Cashfree account Auto-Pay runs on. Normally the one payments use
+// (CASHFREE_*). Given a key pair of its own — AUTOPAY_CASHFREE_APP_ID /
+// AUTOPAY_CASHFREE_SECRET_KEY, with AUTOPAY_CASHFREE_ENV — Auto-Pay talks to
+// that one instead. That is how Auto-Pay runs on Cashfree's TEST environment
+// while payments stay live, for as long as the live account's Subscriptions
+// product is not activated (Cashfree answers "Profile is inactive" until then).
+const autoPayGateway = () => {
+  const appId = process.env.AUTOPAY_CASHFREE_APP_ID;
+  const secretKey = process.env.AUTOPAY_CASHFREE_SECRET_KEY;
+  if (usable(appId) && usable(secretKey)) {
+    return { appId, secretKey, env: process.env.AUTOPAY_CASHFREE_ENV === 'production' ? 'production' : 'sandbox' };
+  }
+  return {
+    appId: process.env.CASHFREE_APP_ID,
+    secretKey: process.env.CASHFREE_SECRET_KEY,
+    env: process.env.CASHFREE_ENV === 'production' ? 'production' : 'sandbox',
+  };
+};
+
+const subscriptionBase = () => (autoPayGateway().env === 'production'
+  ? 'https://api.cashfree.com/pg'
+  : 'https://sandbox.cashfree.com/pg');
+
 const subscriptionConfig = () => {
-  const config = cashfreeConfig();
-  return { ...config, headers: { ...config.headers, 'x-api-version': SUBSCRIPTION_API_VERSION } };
+  const { appId, secretKey } = autoPayGateway();
+  return {
+    timeout: TIMEOUT_MS,
+    headers: {
+      'x-client-id': appId,
+      'x-client-secret': secretKey,
+      'x-api-version': SUBSCRIPTION_API_VERSION,
+      'Content-Type': 'application/json',
+    },
+  };
 };
 
 // Cashfree's machine-readable error code ('subscription_not_active', …), if it sent one.
@@ -197,7 +234,7 @@ const cashfreeErrorMessage = (err) => err.response?.data?.message || err.message
 const autoPayMaxAmount = () => parseFloat(process.env.AUTOPAY_MAX_AMOUNT) || 50000;
 
 // How Auto-Pay runs on this server:
-//   'live'        against Cashfree (its sandbox or production, per CASHFREE_ENV)
+//   'live'        against Cashfree (its sandbox or production — see autoPayGateway)
 //   'mock'        simulated, no gateway call — never in production
 //   'unavailable' production without usable keys. Refused rather than
 //                 simulated: a simulated debit marks an EMI paid with no money
@@ -205,9 +242,21 @@ const autoPayMaxAmount = () => parseFloat(process.env.AUTOPAY_MAX_AMOUNT) || 500
 // Outside production the gateway is only used when AUTOPAY_USE_GATEWAY=true,
 // so local work isn't left waiting on a sandbox bank to approve a mandate.
 const autoPayMode = () => {
-  if (process.env.NODE_ENV === 'production') return isConfigured('cashfree') ? 'live' : 'unavailable';
-  return process.env.AUTOPAY_USE_GATEWAY === 'true' && isConfigured('cashfree') ? 'live' : 'mock';
+  const { appId, secretKey } = autoPayGateway();
+  const configured = usable(appId) && usable(secretKey);
+  if (process.env.NODE_ENV === 'production') return configured ? 'live' : 'unavailable';
+  return process.env.AUTOPAY_USE_GATEWAY === 'true' && configured ? 'live' : 'mock';
 };
+
+// True when Auto-Pay goes through Cashfree's test environment. Mandates and
+// debits then run exactly as on the real one, but there is no bank behind
+// them: NO MONEY IS DEBITED. Because of that this server gives the bank's
+// answer itself (utils/autoPay.js, answerTestDebit) and marks every such
+// debit "[TEST]" in the transactions.
+const autoPayIsTest = () => autoPayMode() === 'live' && autoPayGateway().env === 'sandbox';
+
+// For the admin's Settings page.
+const describeAutoPay = () => ({ mode: autoPayMode(), test: autoPayIsTest() });
 
 const cashfreeSubscriptions = {
   // Registers a mandate for the customer to authorise. `bank` is their
@@ -219,7 +268,7 @@ const cashfreeSubscriptions = {
     const expiry = new Date();
     expiry.setFullYear(expiry.getFullYear() + AUTOPAY_VALIDITY_YEARS);
 
-    const { data } = await axios.post(`${cashfreeBase()}/subscriptions`, {
+    const { data } = await axios.post(`${subscriptionBase()}/subscriptions`, {
       subscription_id: subscriptionId,
       customer_details: {
         customer_name: customer.name || 'Customer',
@@ -259,7 +308,7 @@ const cashfreeSubscriptions = {
   // Resolves to null when Cashfree has no subscription with this id.
   async fetch(subscriptionId) {
     try {
-      const { data } = await axios.get(`${cashfreeBase()}/subscriptions/${encodeURIComponent(subscriptionId)}`, subscriptionConfig());
+      const { data } = await axios.get(`${subscriptionBase()}/subscriptions/${encodeURIComponent(subscriptionId)}`, subscriptionConfig());
       return data;
     } catch (err) {
       if (cashfreeErrorCode(err) === 'subscription_not_found') return null;
@@ -271,7 +320,7 @@ const cashfreeSubscriptions = {
   // on a subscription after a failed charge.
   async manage(subscriptionId, action) {
     const { data } = await axios.post(
-      `${cashfreeBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/manage`,
+      `${subscriptionBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/manage`,
       { subscription_id: subscriptionId, action },
       subscriptionConfig()
     );
@@ -283,7 +332,7 @@ const cashfreeSubscriptions = {
   // tomorrow up to 14 days out (a debit can't be presented the day it is
   // raised). The result arrives later by webhook; see utils/autoPay.js.
   async charge({ subscriptionId, paymentId, amount, scheduleDate, remarks }) {
-    const { data } = await axios.post(`${cashfreeBase()}/subscriptions/pay`, {
+    const { data } = await axios.post(`${subscriptionBase()}/subscriptions/pay`, {
       subscription_id: subscriptionId,
       payment_id: paymentId,
       payment_type: 'CHARGE',
@@ -300,7 +349,7 @@ const cashfreeSubscriptions = {
   async fetchPayment(subscriptionId, paymentId) {
     try {
       const { data } = await axios.get(
-        `${cashfreeBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/payments/${encodeURIComponent(paymentId)}`,
+        `${subscriptionBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/payments/${encodeURIComponent(paymentId)}`,
         subscriptionConfig()
       );
       return data;
@@ -317,7 +366,7 @@ const cashfreeSubscriptions = {
   // it is a 19-digit integer, which JSON numbers in JS can't carry exactly.)
   async refund({ subscriptionId, paymentId, amount, note, paymentMode }) {
     const speed = { upi: 'STANDARD', enach: 'INSTANT', pnach: 'INSTANT' }[String(paymentMode || '').toLowerCase()];
-    const { data } = await axios.post(`${cashfreeBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/refunds`, {
+    const { data } = await axios.post(`${subscriptionBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/refunds`, {
       subscription_id: subscriptionId,
       payment_id: paymentId,
       refund_id: `ref_${paymentId.replace('auto_', '')}_${Date.now()}`,
@@ -333,11 +382,31 @@ const cashfreeSubscriptions = {
   // Withdraws a debit that has been scheduled but not yet presented.
   async cancelPayment(subscriptionId, paymentId) {
     const { data } = await axios.post(
-      `${cashfreeBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/payments/${encodeURIComponent(paymentId)}/manage`,
+      `${subscriptionBase()}/subscriptions/${encodeURIComponent(subscriptionId)}/payments/${encodeURIComponent(paymentId)}/manage`,
       { subscription_id: subscriptionId, payment_id: paymentId, action: 'CANCEL' },
       subscriptionConfig()
     );
     return data;
+  },
+
+  // Test environment only: gives a debit the answer a bank would have given.
+  // Cashfree's sandbox takes it once the debit has reached its day (PENDING);
+  // before that it answers with an error. status: 'SUCCESS' | 'FAILED'.
+  async simulatePayment(paymentId, status) {
+    if (autoPayGateway().env !== 'sandbox') {
+      throw new Error("A debit can only be simulated on Cashfree's test environment");
+    }
+    const { data } = await axios.post('https://sandbox.cashfree.com/pg/simulate', {
+      entity: 'SUBS_PAYMENTS',
+      entity_id: paymentId,
+      entity_simulation: { payment_status: status },
+    }, subscriptionConfig());
+    return data;
+  },
+
+  // A subscription webhook, signed with the keys Auto-Pay runs on.
+  verifyWebhookSignature(rawBody, timestamp, signature) {
+    return isCashfreeSignature(autoPayGateway().secretKey, rawBody, timestamp, signature);
   },
 };
 
@@ -440,5 +509,6 @@ module.exports = {
   isConfigured, describeGateway, isAuthError, gatewayMode, mockPaymentsAllowed, toRupees,
   getSelectedGateway, setSelectedGateway, pickGatewayForOrder, gatewayOfOrder,
   cashfree, razorpay, clients,
-  cashfreeSubscriptions, cashfreeErrorCode, cashfreeErrorMessage, autoPayMode, autoPayMaxAmount,
+  cashfreeSubscriptions, cashfreeErrorCode, cashfreeErrorMessage, autoPayMaxAmount,
+  autoPayGateway, autoPayMode, autoPayIsTest, describeAutoPay,
 };
