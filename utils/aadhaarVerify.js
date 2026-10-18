@@ -26,14 +26,22 @@ const VERIFY_OTP_ERRORS = {
 };
 
 /**
- * Helper – make a POST call and return parsed body
+ * Helper – make a POST call and return parsed body.
+ * APItxt rejects a request with HTTP 4xx and a JSON body ({ status: 'error', message }),
+ * so that body is returned like a normal reply instead of being lost in a thrown error.
  */
-const post = async (endpoint, body) => {
-  const response = await axios.post(`${BASE_URL}/${endpoint}`, body, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 15000,
-  });
-  return response.data;
+const post = async (endpoint, body, timeout = 15000) => {
+  try {
+    const response = await axios.post(`${BASE_URL}/${endpoint}`, body, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout,
+    });
+    return response.data;
+  } catch (err) {
+    const data = err.response?.data;
+    if (err.response && err.response.status < 500 && data && typeof data === 'object') return data;
+    throw err;
+  }
 };
 
 /**
@@ -116,6 +124,7 @@ const aadhaarSendOTP = async (aadhaarNumber) => {
       };
     }
 
+    console.warn('[Aadhaar SendOTP] rejected:', raw?.status, raw?.message, raw?.request_id || '');
     return {
       success: false, referenceId: null, maskedAadhaar: null,
       requestId: raw?.request_id || null, message: errDesc,
@@ -196,9 +205,10 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
 
   let raw;
   try {
+    // UIDAI can be slow to answer the verify step
     raw = await post('aadhaarVerifyOTP', {
       authkey: authKey, reference_id: referenceId, otp: String(otp),
-    });
+    }, 30000);
   } catch (err) {
     console.error('[Aadhaar VerifyOTP] HTTP error:', err.message);
     if (process.env.NODE_ENV === 'development') {
@@ -246,6 +256,7 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
       };
     }
 
+    console.warn('[Aadhaar VerifyOTP] rejected:', raw?.status, raw?.message, raw?.request_id || '');
     return {
       success: false, verified: false, name: null, dob: null, gender: null,
       careOf: null, fullAddress: null, address: null, photo: null, hasPhoto: false,
@@ -255,6 +266,10 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
   }
 
   const d = raw?.data || {};
+
+  if (!d.verified) {
+    console.warn('[Aadhaar VerifyOTP] not verified:', raw?.message, raw?.request_id || '', 'ref', referenceId);
+  }
 
   return {
     success:     true,
@@ -268,7 +283,7 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
     photo:       d.photo        || null,   // base64 JPEG string
     hasPhoto:    !!d.has_photo,
     requestId:   raw.request_id || null,
-    message:     null,
+    message:     d.verified ? null : 'OTP could not be verified. Please check the OTP, or request a new one and enter it within 10 minutes.',
     errorCode:   null,
     raw,
   };
