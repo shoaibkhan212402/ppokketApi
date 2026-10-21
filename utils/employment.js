@@ -1,9 +1,11 @@
 const { pool } = require('../config/db');
+const { normalizeGstin, isValidGstin } = require('./gst');
 
 // Where a customer works — asked with the profile at onboarding and shown on
 // their profile and to the admin: the employer (or their own business), their
 // role there, how many years they have worked, and optionally the current
-// employer's offer letter.
+// employer's offer letter. A self-employed customer may also give the GST
+// number (GSTIN) of their business.
 //
 // It lives in a table of its own, so nothing about the existing tables has to
 // change. The table is created by the first save (CREATE TABLE IF NOT EXISTS);
@@ -18,14 +20,19 @@ const CREATE_TABLE_SQL = `
     experience_years  DECIMAL(4,1) DEFAULT NULL,
     current_job_years DECIMAL(4,1) DEFAULT NULL,
     office_city       VARCHAR(100) DEFAULT NULL,
+    gst_number        VARCHAR(15) DEFAULT NULL,
     offer_letter      VARCHAR(500) DEFAULT NULL,
     offer_letter_at   DATETIME DEFAULT NULL,
     updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
 
-const COLUMNS = 'user_id, company_name, designation, experience_years, current_job_years, office_city, offer_letter, offer_letter_at, updated_at';
+// The GST number came later than the table. A table made before that gets the
+// column added by the first save that has one (see addGstColumn); reads use
+// SELECT * so they work with or without it.
+const ADD_GST_COLUMN_SQL = 'ALTER TABLE user_employment ADD COLUMN gst_number VARCHAR(15) DEFAULT NULL AFTER office_city';
 
 const isMissingTable = (err) => err?.code === 'ER_NO_SUCH_TABLE';
+const isMissingColumn = (err) => err?.code === 'ER_BAD_FIELD_ERROR';
 const invalid = (message) => Object.assign(new Error(message), { isValidation: true });
 
 const text = (value, max) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
@@ -54,7 +61,13 @@ const cleanEmployment = (input) => {
   if (current_job_years !== null && current_job_years > experience_years) {
     throw invalid('Time in the current job cannot be more than your total work experience');
   }
-  return { company_name, designation, experience_years, current_job_years, office_city: text(input.office_city, 100) || null };
+  // Optional: many small businesses are not registered for GST. Not sent at
+  // all (app 1.0.4 and older) = keep whatever is stored.
+  const gst_number = input.gst_number === undefined ? undefined : normalizeGstin(input.gst_number) || null;
+  if (gst_number && !isValidGstin(gst_number)) {
+    throw invalid('GST number is not valid. It has 15 characters, like 27AAPFU0939F1ZV.');
+  }
+  return { company_name, designation, experience_years, current_job_years, office_city: text(input.office_city, 100) || null, gst_number };
 };
 
 const num = (value) => (value == null ? null : Number(value));
@@ -64,6 +77,7 @@ const shape = (row) => ({
   experience_years: num(row.experience_years),
   current_job_years: num(row.current_job_years),
   office_city: row.office_city,
+  gst_number: row.gst_number ?? null,
   offer_letter: row.offer_letter,
   offer_letter_at: row.offer_letter_at,
   updated_at: row.updated_at,
@@ -74,7 +88,7 @@ const employmentOf = async (userIds) => {
   const ids = [...new Set(userIds.filter((id) => id != null))];
   if (!ids.length) return new Map();
   try {
-    const [rows] = await pool.query(`SELECT ${COLUMNS} FROM user_employment WHERE user_id IN (?)`, [ids]);
+    const [rows] = await pool.query('SELECT * FROM user_employment WHERE user_id IN (?)', [ids]);
     return new Map(rows.map((row) => [row.user_id, shape(row)]));
   } catch (err) {
     if (!isMissingTable(err)) console.error('[employment] could not read employment details:', err.message);
@@ -126,33 +140,75 @@ const store = async (write) => {
   }
 };
 
+// Adds the gst_number column to a table made before it existed. Resolves to
+// whether the column is there now.
+const addGstColumn = async () => {
+  try {
+    await pool.query(ADD_GST_COLUMN_SQL);
+    return true;
+  } catch (err) {
+    if (err?.code === 'ER_DUP_FIELDNAME') return true; // another request added it first
+    console.error('[employment] could not add the GST number column:', err.message);
+    return false;
+  }
+};
+
 // `details` comes from cleanEmployment(). null clears the employer details
 // (the customer no longer has one) but keeps any uploaded offer letter.
 // Resolves to false when the details could not be stored.
 const saveEmployment = async (userId, details) => {
   if (details === null) {
+    const clear = (gstColumn) => pool.query(
+      `UPDATE user_employment
+          SET company_name = NULL, designation = NULL, experience_years = NULL, current_job_years = NULL, office_city = NULL${gstColumn ? ', gst_number = NULL' : ''}
+        WHERE user_id = ?`,
+      [userId]
+    );
     try {
-      await pool.query(
-        `UPDATE user_employment
-            SET company_name = NULL, designation = NULL, experience_years = NULL, current_job_years = NULL, office_city = NULL
-          WHERE user_id = ?`,
-        [userId]
-      );
+      try {
+        await clear(true);
+      } catch (err) {
+        if (!isMissingColumn(err)) throw err;
+        await clear(false);
+      }
     } catch (err) {
       // No table yet means there is nothing to clear.
       if (!isMissingTable(err)) console.error('[employment] could not clear employment details:', err.message);
     }
     return true;
   }
-  return store(() => pool.query(
+
+  const values = [userId, details.company_name, details.designation, details.experience_years, details.current_job_years, details.office_city];
+  const keepGst = details.gst_number === undefined; // the form did not send one
+  const write = () => pool.query(
+    `INSERT INTO user_employment (user_id, company_name, designation, experience_years, current_job_years, office_city, gst_number)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       company_name = VALUES(company_name), designation = VALUES(designation),
+       experience_years = VALUES(experience_years), current_job_years = VALUES(current_job_years),
+       office_city = VALUES(office_city)${keepGst ? '' : ', gst_number = VALUES(gst_number)'}`,
+    [...values, details.gst_number ?? null]
+  );
+  // For a table that has no gst_number column and cannot be given one
+  const writeWithoutGst = () => pool.query(
     `INSERT INTO user_employment (user_id, company_name, designation, experience_years, current_job_years, office_city)
      VALUES (?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        company_name = VALUES(company_name), designation = VALUES(designation),
        experience_years = VALUES(experience_years), current_job_years = VALUES(current_job_years),
        office_city = VALUES(office_city)`,
-    [userId, details.company_name, details.designation, details.experience_years, details.current_job_years, details.office_city]
-  ));
+    values
+  );
+  return store(async () => {
+    try {
+      await write();
+    } catch (err) {
+      if (!isMissingColumn(err)) throw err;
+      // The column is only added once someone actually gives a GST number
+      if (details.gst_number && await addGstColumn()) await write();
+      else await writeWithoutGst();
+    }
+  });
 };
 
 // Resolves to false when it could not be stored.
@@ -163,6 +219,6 @@ const saveOfferLetter = (userId, url) => store(() => pool.query(
 ));
 
 module.exports = {
-  CREATE_TABLE_SQL, cleanEmployment, getEmployment, attachEmployment, withoutDocument,
+  CREATE_TABLE_SQL, ADD_GST_COLUMN_SQL, cleanEmployment, getEmployment, attachEmployment, withoutDocument,
   saveEmployment, saveOfferLetter, isEmploymentUnavailable,
 };

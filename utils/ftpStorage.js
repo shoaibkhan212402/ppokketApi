@@ -34,7 +34,8 @@ class FTPStorage {
         secure:   false,
       });
 
-      const userId    = req.user?.id || 'general';
+      // An admin uploading for a customer sets req.uploadUserId (that customer's folder)
+      const userId    = req.uploadUserId || req.user?.id || 'general';
       const ext       = path.extname(file.originalname) || MIME_TO_EXT[file.mimetype] || '';
       const filename  = `${file.fieldname}_${Date.now()}${ext}`;
       const remoteDir = `${this.uploadDir}/${userId}`;

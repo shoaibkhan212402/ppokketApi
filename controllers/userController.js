@@ -7,13 +7,17 @@ const { loadChargeContext, chargesAsOf, plainCharges, attachLoanCharges, attachE
 const { defaultFirstEmiDate } = require('../utils/loanUtils');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
 const { companyNames } = require('../utils/companies');
+const { cleanReferences, getReferences, saveReferences, isReferencesUnavailable } = require('../utils/references');
 
-// Where the customer works (company, designation, experience, offer letter),
-// added to the profile the clients receive. `employment_unavailable` tells
+// Where the customer works (company, designation, experience, GST number,
+// offer letter) and their two reference contacts, added to the profile the
+// clients receive. `employment_unavailable` / `references_unavailable` tell
 // their forms not to insist on details the server is unable to store.
 const addEmployment = async (user) => {
   user.employment = await getEmployment(user.id);
   user.employment_unavailable = isEmploymentUnavailable();
+  user.references = await getReferences(user.id);
+  user.references_unavailable = isReferencesUnavailable();
 };
 
 // The extra charges (Admin → Charges) a loan approved now would carry, in the
@@ -153,6 +157,19 @@ const updateProfile = async (req, res) => {
       }
     }
 
+    // Two reference contacts — optional here for the same reason (the current
+    // forms require them before KYC). Their own number can't be a reference.
+    let references; // undefined = not sent → whatever is stored is left alone
+    if (req.body.references !== undefined) {
+      try {
+        const [[me]] = await pool.query('SELECT mobile FROM users WHERE id = ?', [req.user.id]);
+        references = cleanReferences(req.body.references, me?.mobile);
+      } catch (err) {
+        if (err.isValidation) return res.status(400).json({ success: false, message: err.message });
+        throw err;
+      }
+    }
+
     // Process referral code if provided and user does not already have a referrer
     if (referral_code) {
       const [currentUserRow] = await pool.query('SELECT referred_by FROM users WHERE id = ?', [req.user.id]);
@@ -232,6 +249,7 @@ const updateProfile = async (req, res) => {
       [final_name, final_email, final_pan, final_aadhaar, final_dob, final_occ, final_inc, fcm_token, dark_mode, language, req.user.id]
     );
     if (employment !== undefined) await saveEmployment(req.user.id, employment);
+    if (references !== undefined) await saveReferences(req.user.id, references);
 
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
     const user = rows[0];

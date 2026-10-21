@@ -41,6 +41,32 @@ const { adminGetReferrals, adminCreditReferral } = require('../controllers/refer
 const { getContactMessages, toggleContactMessageRead } = require('../controllers/contactController');
 const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal, adminRejectWithdrawal } = require('../controllers/investmentController');
 const { getLoanCharges, updateLoanCharges } = require('../controllers/chargesController');
+const { getCoupons, addCoupon, editCoupon, removeCoupon } = require('../controllers/couponController');
+const { getCustomerEditData, updateCustomerDetails, uploadCustomerDocuments } = require('../controllers/customerEditController');
+const { getArchived, getArchiveCandidates, archive, restore } = require('../controllers/archiveController');
+const upload = require('../middleware/upload');
+const { pool } = require('../config/db');
+
+// Documents a super admin uploads for a customer: the same checks as the
+// customer's own uploads, stored in that customer's folder.
+const customerDocFields = upload.fields(
+  ['aadhaar_front', 'aadhaar_back', 'pan_card', 'selfie', 'bank_passbook', 'offer_letter'].map((name) => ({ name, maxCount: 1 }))
+);
+const handleCustomerDocs = async (req, res, next) => {
+  try {
+    const [[user]] = await pool.query('SELECT id FROM users WHERE id = ?', [req.params.userId]);
+    if (!user) return res.status(404).json({ success: false, message: 'Customer not found' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+  req.uploadUserId = Number(req.params.userId);
+  return customerDocFields(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ success: false, message: 'File too large. Maximum size is 10MB.' });
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') return res.status(400).json({ success: false, message: 'Unknown document type.' });
+    return res.status(400).json({ success: false, message: err.message || 'Upload failed' });
+  });
+};
 const { getGatewayConfig, setGateway } = require('../controllers/paymentController');
 
 router.use(adminProtect); // All admin routes protected
@@ -108,6 +134,23 @@ router.put('/payment-gateway', requireSuperAdmin, setGateway);
 // Extra loan charges — at disbursal or on every EMI (super_admin only)
 router.get('/loan-charges', requireSuperAdmin, getLoanCharges);
 router.put('/loan-charges', requireSuperAdmin, updateLoanCharges);
+
+// Archive: customers set aside, e.g. KYC left half done (super_admin only)
+router.get('/archive', requireSuperAdmin, getArchived);
+router.get('/archive/candidates', requireSuperAdmin, getArchiveCandidates);
+router.post('/archive', requireSuperAdmin, archive);
+router.post('/archive/restore', requireSuperAdmin, restore);
+
+// Correct a customer's details / upload or replace their documents (super_admin only)
+router.get('/users/:userId/edit-data', requireSuperAdmin, getCustomerEditData);
+router.put('/users/:userId/details', requireSuperAdmin, updateCustomerDetails);
+router.post('/users/:userId/documents', requireSuperAdmin, handleCustomerDocs, uploadCustomerDocuments);
+
+// Coupon codes a customer can use at the withdrawal request (super_admin only)
+router.get('/coupons', requireSuperAdmin, getCoupons);
+router.post('/coupons', requireSuperAdmin, addCoupon);
+router.put('/coupons/:id', requireSuperAdmin, editCoupon);
+router.delete('/coupons/:id', requireSuperAdmin, removeCoupon);
 
 router.get('/investments', requireSuperAdmin, adminGetAllInvestments);
 router.get('/investments/:id', requireSuperAdmin, adminGetInvestmentDetail);

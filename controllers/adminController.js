@@ -12,6 +12,10 @@ const {
   attachLoanCharges, attachEmiCharges, ensureEmiChargeItemsTable, storeEmiChargeItems,
 } = require('../utils/loanCharges');
 const { getEmployment, attachEmployment, withoutDocument } = require('../utils/employment');
+const { getReferences, attachReferences, maskReferences } = require('../utils/references');
+const { attachSelfieChecks } = require('../utils/selfieCheck');
+const { attachCoupons, couponOffDisbursal } = require('../utils/coupons');
+const { notArchivedSql, archivedCount } = require('../utils/archive');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { getUserCreditDetails } = require('./userController');
@@ -43,15 +47,17 @@ const getAdminDashboard = async (req, res) => {
     if (cached) return res.json(cached);
 
     let totalUsers, totalLoans, pendingLoans, approvedLoans, totalDisbursed, totalCollected, pendingKYC, recentLoans;
+    // Customers in the Archive are not counted as users or pending KYC
+    const na = await notArchivedSql('u');
 
     if (isPartner) {
-      [[totalUsers]] = await pool.query('SELECT COUNT(*) as count FROM users WHERE assigned_partner_id = ?', [req.admin.id]);
+      [[totalUsers]] = await pool.query(`SELECT COUNT(*) as count FROM users u WHERE u.assigned_partner_id = ?${na}`, [req.admin.id]);
       [[totalLoans]] = await pool.query('SELECT COUNT(*) as count FROM loans l JOIN users u ON u.id = l.user_id WHERE u.assigned_partner_id = ?', [req.admin.id]);
       [[pendingLoans]] = await pool.query("SELECT COUNT(*) as count FROM loans l JOIN users u ON u.id = l.user_id WHERE l.status = 'pending' AND u.assigned_partner_id = ?", [req.admin.id]);
       [[approvedLoans]] = await pool.query("SELECT COUNT(*) as count FROM loans l JOIN users u ON u.id = l.user_id WHERE l.status IN ('approved','disbursed') AND u.assigned_partner_id = ?", [req.admin.id]);
       [[totalDisbursed]] = await pool.query("SELECT COALESCE(SUM(l.amount),0) as total FROM loans l JOIN users u ON u.id = l.user_id WHERE l.status = 'disbursed' AND u.assigned_partner_id = ?", [req.admin.id]);
       [[totalCollected]] = await pool.query("SELECT COALESCE(SUM(t.amount),0) as total FROM transactions t JOIN users u ON u.id = t.user_id WHERE t.status = 'success' AND t.type = 'emi' AND u.assigned_partner_id = ?", [req.admin.id]);
-      [[pendingKYC]] = await pool.query("SELECT COUNT(*) as count FROM kyc_documents kd JOIN users u ON u.id = kd.user_id WHERE kd.status = 'pending' AND u.assigned_partner_id = ?", [req.admin.id]);
+      [[pendingKYC]] = await pool.query(`SELECT COUNT(*) as count FROM kyc_documents kd JOIN users u ON u.id = kd.user_id WHERE kd.status = 'pending' AND u.assigned_partner_id = ?${na}`, [req.admin.id]);
       const [[overdueEmis]] = await pool.query("SELECT COUNT(*) as count FROM emi_schedule e JOIN users u ON u.id = e.user_id WHERE e.status = 'overdue' AND u.assigned_partner_id = ?", [req.admin.id]);
 
       [recentLoans] = await pool.query(
@@ -90,13 +96,13 @@ const getAdminDashboard = async (req, res) => {
       await setCache(cacheKey, response, CACHE_TTL.LONG);
       return res.json(response);
     } else {
-      [[totalUsers]] = await pool.query('SELECT COUNT(*) as count FROM users');
+      [[totalUsers]] = await pool.query(`SELECT COUNT(*) as count FROM users u WHERE 1 = 1${na}`);
       [[totalLoans]] = await pool.query('SELECT COUNT(*) as count FROM loans');
       [[pendingLoans]] = await pool.query("SELECT COUNT(*) as count FROM loans WHERE status = 'pending'");
       [[approvedLoans]] = await pool.query("SELECT COUNT(*) as count FROM loans WHERE status IN ('approved','disbursed')");
       [[totalDisbursed]] = await pool.query("SELECT COALESCE(SUM(amount),0) as total FROM loans WHERE status = 'disbursed'");
       [[totalCollected]] = await pool.query("SELECT COALESCE(SUM(amount),0) as total FROM transactions WHERE status = 'success' AND type = 'emi'");
-      [[pendingKYC]] = await pool.query("SELECT COUNT(*) as count FROM kyc_documents WHERE status = 'pending'");
+      [[pendingKYC]] = await pool.query(`SELECT COUNT(*) as count FROM kyc_documents kd JOIN users u ON u.id = kd.user_id WHERE kd.status = 'pending'${na}`);
 
       [recentLoans] = await pool.query(
         `SELECT l.*, u.full_name, u.mobile,
@@ -141,6 +147,8 @@ const getAllUsers = async (req, res) => {
     const offset = (page - 1) * limit;
     const searchParam = `%${search}%`;
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
+    // Customers in the Archive are left out (Admin → Archive lists them)
+    const na = await notArchivedSql('u');
 
     let query = `
       SELECT u.id, u.full_name, u.mobile, u.email, u.date_of_birth as dob, u.pan_number, u.aadhaar_number,
@@ -155,7 +163,7 @@ const getAllUsers = async (req, res) => {
        FROM users u
        LEFT JOIN kyc_documents k ON k.user_id = u.id
        LEFT JOIN admins a ON a.id = u.assigned_partner_id
-       WHERE (u.full_name LIKE ? OR u.mobile LIKE ? OR u.email LIKE ?)
+       WHERE (u.full_name LIKE ? OR u.mobile LIKE ? OR u.email LIKE ?)${na}
     `;
     const params = [searchParam, searchParam, searchParam];
 
@@ -171,10 +179,17 @@ const getAllUsers = async (req, res) => {
     // Where each customer works (company, designation, experience, offer
     // letter). Partners are told the offer letter exists, not given the file.
     await attachEmployment(users);
-    if (isPartner) for (const user of users) user.employment = withoutDocument(user.employment);
+    // …and the two people they gave as references (partners don't get the numbers)
+    await attachReferences(users);
+    if (isPartner) {
+      for (const user of users) {
+        user.employment = withoutDocument(user.employment);
+        user.references = maskReferences(user.references);
+      }
+    }
     hideIdNumbers(req.admin, users);
 
-    let countQuery = 'SELECT COUNT(*) as total FROM users WHERE (full_name LIKE ? OR mobile LIKE ? OR email LIKE ?)';
+    let countQuery = `SELECT COUNT(*) as total FROM users u WHERE (u.full_name LIKE ? OR u.mobile LIKE ? OR u.email LIKE ?)${na}`;
     const countParams = [searchParam, searchParam, searchParam];
     if (isPartner) {
       countQuery += ' AND assigned_partner_id = ?';
@@ -183,7 +198,9 @@ const getAllUsers = async (req, res) => {
 
     const [[{ total }]] = await pool.query(countQuery, countParams);
 
-    res.json({ success: true, users, total, page: parseInt(page), limit: parseInt(limit) });
+    // How many are in the Archive (super admin sees a link to it)
+    const archived_total = req.admin.role === 'super_admin' ? await archivedCount() : undefined;
+    res.json({ success: true, users, total, page: parseInt(page), limit: parseInt(limit), archived_total });
   } catch (err) {
     console.error('[getAllUsers]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -248,6 +265,8 @@ const getLeadKycDetails = async (req, res) => {
     if (!kyc) return res.status(404).json({ success: false, message: 'User not found' });
     // Like the documents above: whether an offer letter was given, not the file
     kyc.employment = withoutDocument(await getEmployment(userId));
+    const references = await getReferences(userId);
+    kyc.references = isPartner ? maskReferences(references) : references;
     hideIdNumbers(req.admin, [kyc]);
     res.json({ success: true, kyc });
   } catch (err) {
@@ -301,11 +320,15 @@ const getAllLoans = async (req, res) => {
     const [loans] = await pool.query(query, params);
     // Extra charges each loan carries (Admin → Charges)
     attachLoanCharges(loans, await loadChargeContext());
+    // A coupon used at the withdrawal request (folds into loan.charges.net_disbursal)
+    await attachCoupons(loans);
     // Where the borrower works
     await attachEmployment(loans, 'user_id');
+    await attachReferences(loans, 'user_id');
     if (isPartner) {
       for (const loan of loans) {
         loan.employment = withoutDocument(loan.employment);
+        loan.references = maskReferences(loan.references);
         // The bank account a payout goes to is for the staff who send it
         delete loan.payout_account_holder; delete loan.payout_account_number; delete loan.payout_ifsc; delete loan.payout_bank_name;
       }
@@ -708,16 +731,22 @@ const getPendingKYC = async (req, res) => {
        JOIN users u ON u.id = k.user_id
        LEFT JOIN bank_details bd ON bd.user_id = u.id
     `;
+    // Customers in the Archive are left out
+    query += ` WHERE 1 = 1${await notArchivedSql('u')}`;
     const params = [];
     if (isPartner) {
-      query += ' WHERE u.assigned_partner_id = ?';
+      query += ' AND u.assigned_partner_id = ?';
       params.push(req.admin.id);
     }
     query += ' ORDER BY k.created_at ASC';
 
     const [kycs] = await pool.query(query, params);
-    // Where each applicant works, with the offer letter if they gave one
+    // Where each applicant works, with the offer letter if they gave one,
+    // their two references, and whether the selfie passed the blink check
     await attachEmployment(kycs, 'user_id');
+    await attachReferences(kycs, 'user_id');
+    if (isPartner) for (const kyc of kycs) kyc.references = maskReferences(kyc.references);
+    await attachSelfieChecks(kycs, 'user_id');
     hideIdNumbers(req.admin, kycs);
     res.json({ success: true, kycs });
   } catch (err) {
@@ -1023,6 +1052,14 @@ const disburseLoan = async (req, res) => {
       const itemised = ` (${disbursalExtras.items.map((c) => `₹${c.amount} ${c.name}`).join(', ')} deducted)`;
       // transactions.description is VARCHAR(500): a long list is summarised
       feeDeductionMsg += itemised.length <= 250 ? itemised : ` (₹${disbursalExtras.total} other charges deducted)`;
+    }
+
+    // A coupon the customer used at the withdrawal request: that much less of
+    // the fees is deducted (utils/coupons.js)
+    const coupon = await couponOffDisbursal(conn, loanId);
+    if (coupon && coupon.amount > 0) {
+      payoutAmount = Math.min(parseFloat(loan.amount), Math.round((payoutAmount + coupon.amount) * 100) / 100);
+      feeDeductionMsg += ` (₹${coupon.amount} off with coupon ${coupon.code})`;
     }
 
     // All three writes are atomic — if any fails, the whole transaction rolls back
@@ -1779,7 +1816,7 @@ const getAllDsaLeads = async (req, res) => {
          FROM users u
          JOIN users referrer ON referrer.id = u.referred_by
          LEFT JOIN kyc_documents kd ON kd.user_id = u.id
-        WHERE referrer.is_dsa_partner = 1
+        WHERE referrer.is_dsa_partner = 1${await notArchivedSql('u')}
         ORDER BY u.created_at DESC`
     );
     res.json({ success: true, leads });

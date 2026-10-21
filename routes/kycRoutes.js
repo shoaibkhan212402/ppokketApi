@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { uploadKYC, getKYCStatus, autoVerifyKYC, panVerifyEndpoint } = require('../controllers/kycController');
 const { protect } = require('../middleware/auth');
+// A customer in the Admin → Archive who carries on leaves it (utils/archive.js)
+const { backFromArchive } = require('../utils/archive');
 const upload = require('../middleware/upload');
 
 const kycFields = upload.fields([
@@ -40,10 +42,10 @@ const handleKycUpload = (req, res, next) => {
   });
 };
 
-router.post('/upload',      protect, handleKycUpload, uploadKYC);
+router.post('/upload',      protect, backFromArchive('KYC document uploaded'), handleKycUpload, uploadKYC);
 router.get('/status',       protect, getKYCStatus);
-router.post('/auto-verify', protect, autoVerifyKYC);
-router.post('/pan-verify',  protect, panVerifyEndpoint);
+router.post('/auto-verify', protect, backFromArchive('KYC submitted'), autoVerifyKYC);
+router.post('/pan-verify',  protect, backFromArchive('PAN verified'), panVerifyEndpoint);
 
 module.exports = router;
 

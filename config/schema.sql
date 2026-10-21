@@ -437,9 +437,46 @@ CREATE TABLE IF NOT EXISTS user_employment (
   experience_years  DECIMAL(4,1) DEFAULT NULL,   -- total work experience
   current_job_years DECIMAL(4,1) DEFAULT NULL,   -- time with the current employer
   office_city       VARCHAR(100) DEFAULT NULL,
+  gst_number        VARCHAR(15) DEFAULT NULL,    -- GSTIN of a self-employed customer's business (optional; added to an older table by the first save that has one)
   offer_letter      VARCHAR(500) DEFAULT NULL,
   offer_letter_at   DATETIME DEFAULT NULL,
   updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- USER REFERENCES (two people who know the customer — slot 1 a family member,
+-- slot 2 a friend or colleague — asked at onboarding, shown to the admin).
+-- The server creates this table by itself the first time a customer saves
+-- references (utils/references.js).
+CREATE TABLE IF NOT EXISTS user_references (
+  user_id    INT NOT NULL,
+  slot       TINYINT NOT NULL,                  -- 1 = family, 2 = friend / colleague
+  name       VARCHAR(100) NOT NULL,
+  mobile     VARCHAR(10) NOT NULL,
+  relation   VARCHAR(30) NOT NULL,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, slot)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- USER ARCHIVE (Admin → Archive: customers set aside by the super admin, e.g.
+-- KYC left half done; hidden from the admin's working lists only). Created by
+-- the server on first use (utils/archive.js); a customer who carries on leaves it.
+CREATE TABLE IF NOT EXISTS user_archive (
+  user_id          INT NOT NULL PRIMARY KEY,
+  reason           VARCHAR(255) DEFAULT NULL,
+  stage            VARCHAR(60) DEFAULT NULL,       -- where they had stopped when archived
+  archived_by      INT DEFAULT NULL,
+  archived_by_name VARCHAR(100) DEFAULT NULL,
+  archived_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- KYC SELFIE CHECKS (which selfie passed the live blink check on the
+-- customer's device; shown to the admin next to the selfie). Created by the
+-- server the first time such a selfie is uploaded (utils/selfieCheck.js).
+CREATE TABLE IF NOT EXISTS kyc_selfie_checks (
+  user_id    INT NOT NULL PRIMARY KEY,
+  selfie     VARCHAR(500) NOT NULL,              -- the selfie file that passed
+  method     VARCHAR(20) NOT NULL,               -- blink
+  checked_at DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- EMI CHARGE ITEMS (what each instalment was charged on top of principal and

@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead } = require('../controllers/userController');
 const { protect } = require('../middleware/auth');
+// A customer in the Admin → Archive who carries on leaves it (utils/archive.js)
+const { backFromArchive } = require('../utils/archive');
 const upload = require('../middleware/upload');
 
 // One file, field name "offer_letter"; multer's own errors (too large, wrong
@@ -19,12 +21,13 @@ const handleOfferLetterUpload = (req, res, next) => {
 };
 
 router.get('/profile', protect, getProfile);
-router.put('/update', protect, updateProfile);
+// Only a saved profile form counts, not the app refreshing its push token
+router.put('/update', protect, backFromArchive('Profile saved', (req) => req.body?.full_name !== undefined), updateProfile);
 router.post('/offer-letter', protect, handleOfferLetterUpload, uploadOfferLetter);
 // Suggestions for the "Company Name" box — open, so the sign-up form can use it too
 router.get('/companies', getCompanies);
 router.put('/bank-details', protect, updateBankDetails);
-router.post('/bank-verify', protect, verifyBankDetails);
+router.post('/bank-verify', protect, backFromArchive('Bank account verified'), verifyBankDetails);
 router.get('/dashboard', protect, getDashboard);
 router.get('/notifications', protect, getNotifications);
 router.put('/notifications/read', protect, markNotificationsRead);

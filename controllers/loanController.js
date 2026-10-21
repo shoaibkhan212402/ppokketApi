@@ -5,6 +5,7 @@ const { sendNotification } = require('../utils/fcm');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { sendLoanAgreementEmail } = require('../utils/email');
 const { getUserCreditDetails } = require('./userController');
+const { ensureCouponTables, cleanCode, previewCoupon, applyCoupon, attachCoupons } = require('../utils/coupons');
 
 // POST /api/loan/apply
 const applyLoan = async (req, res) => {
@@ -166,6 +167,8 @@ const getLoanHistory = async (req, res) => {
     // loan.charges: what is deducted at disbursal, what each EMI carries, and
     // the amount that reaches the bank account
     attachLoanCharges(loans, await loadChargeContext());
+    // A coupon used at withdrawal: what it took off (loan.coupon)
+    await attachCoupons(loans);
     const response = { success: true, loans };
     await setCache(cacheKey, response, CACHE_TTL.MEDIUM);
     res.json(response);
@@ -186,6 +189,7 @@ const getLoanDetails = async (req, res) => {
 
     const chargeCtx = await loadChargeContext();
     attachLoanCharges(loan, chargeCtx);
+    await attachCoupons(loan);
 
     let emiSchedule = [];
     if (['disbursed', 'closed'].includes(loan[0].status)) {
@@ -342,12 +346,27 @@ const getEmiSchedule = async (req, res) => {
   }
 };
 
-// POST /api/loan/request-withdrawal/:id
+// POST /api/loan/coupon-preview/:id   { code }
+// What a coupon would take off this approved loan. Nothing is saved; the
+// coupon is applied by request-withdrawal.
+const previewLoanCoupon = async (req, res) => {
+  try {
+    const coupon = await previewCoupon({ loanId: req.params.id, userId: req.user.id, code: req.body?.code });
+    res.json({ success: true, coupon });
+  } catch (err) {
+    if (err.isValidation) return res.status(err.status || 400).json({ success: false, message: err.message });
+    console.error('[previewLoanCoupon]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/loan/request-withdrawal/:id   { agreementAccepted, coupon_code? }
 const requestWithdrawal = async (req, res) => {
   try {
     const loanId = req.params.id;
     const userId = req.user.id;
     const { agreementAccepted } = req.body;
+    const couponCode = cleanCode(req.body?.coupon_code);
 
     if (!agreementAccepted) {
       return res.status(400).json({ success: false, message: 'You must accept the Loan Agreement to proceed.' });
@@ -362,9 +381,9 @@ const requestWithdrawal = async (req, res) => {
 
     // 2. Validate loan status is 'approved'
     if (loan.status !== 'approved') {
-      return res.status(400).json({ 
-        success: false, 
-        message: `Withdrawal can only be requested for approved loans. Current status is ${loan.status}.` 
+      return res.status(400).json({
+        success: false,
+        message: `Withdrawal can only be requested for approved loans. Current status is ${loan.status}.`
       });
     }
 
@@ -372,29 +391,49 @@ const requestWithdrawal = async (req, res) => {
     const [mandateRows] = await pool.query('SELECT status FROM bank_mandates WHERE user_id = ?', [userId]);
     const mandateActive = mandateRows.length > 0 && mandateRows[0].status === 'active';
     if (!mandateActive) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Auto-Debit mandate must be active before requesting withdrawal.' 
+      return res.status(400).json({
+        success: false,
+        message: 'Auto-Debit mandate must be active before requesting withdrawal.'
       });
     }
 
-    // 4. Update loan status to 'withdrawal_requested' and set agreement details
-    await pool.query(
-      `UPDATE loans 
-       SET status = 'withdrawal_requested', 
-           agreement_accepted = 1, 
-           agreement_accepted_at = NOW() 
-       WHERE id = ?`,
-      [loanId]
-    );
+    // 4. Update loan status to 'withdrawal_requested' and set agreement details.
+    // A coupon code is applied in the same transaction: either both happen or
+    // neither (an invalid code leaves the loan as it was, with a message).
+    let coupon = null;
+    if (couponCode && !(await ensureCouponTables())) {
+      return res.status(503).json({ success: false, message: 'Coupons are not available right now. Please try again later, or continue without the coupon.' });
+    }
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      if (couponCode) coupon = await applyCoupon(conn, { loanId, userId, code: couponCode });
+      const [upd] = await conn.query(
+        `UPDATE loans
+         SET status = 'withdrawal_requested',
+             agreement_accepted = 1,
+             agreement_accepted_at = NOW()
+         WHERE id = ? AND status = 'approved'`,
+        [loanId]
+      );
+      if (!upd.affectedRows) throw Object.assign(new Error('This loan is no longer waiting for a withdrawal request.'), { isValidation: true });
+      await conn.commit();
+    } catch (err) {
+      try { await conn.rollback(); } catch (_) { /* nothing to undo */ }
+      if (err.isValidation) return res.status(err.status || 400).json({ success: false, message: err.message });
+      throw err;
+    } finally {
+      conn.release();
+    }
 
     // 5. Create user notification
     await pool.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
       [
-        userId, 
-        'Withdrawal Request Submitted', 
-        `Your withdrawal request for ₹${loan.amount} has been submitted successfully and is awaiting disbursement.`, 
+        userId,
+        'Withdrawal Request Submitted',
+        `Your withdrawal request for ₹${loan.amount} has been submitted successfully and is awaiting disbursement.`
+          + (coupon ? ` Coupon ${coupon.code} applied: you save ₹${coupon.discount_total}.` : ''),
         'loan'
       ]
     );
@@ -427,7 +466,8 @@ const requestWithdrawal = async (req, res) => {
       sendLoanAgreementEmail({
         user: userRows[0],
         loan: loan,
-        bank: bankRows[0]
+        bank: bankRows[0],
+        coupon,
       }).catch(err => console.error('Failed sending loan agreement email:', err));
     }
 
@@ -435,9 +475,12 @@ const requestWithdrawal = async (req, res) => {
     await invalidateUserCache(userId);
     await delCache('admin:dashboard', 'admin:dashboard:partner:*');
 
-    return res.json({ 
-      success: true, 
-      message: 'Withdrawal request submitted successfully' 
+    return res.json({
+      success: true,
+      message: coupon
+        ? `Withdrawal request submitted. Coupon ${coupon.code} applied — you save ₹${coupon.discount_total}.`
+        : 'Withdrawal request submitted successfully',
+      coupon,
     });
   } catch (err) {
     console.error('[requestWithdrawal]', err);
@@ -479,4 +522,4 @@ const getWithdrawalStatus = async (req, res) => {
   }
 };
 
-module.exports = { applyLoan, getLoanHistory, getLoanDetails, emiCalculator, getEmiSchedule, requestWithdrawal, getWithdrawalStatus };
+module.exports = { applyLoan, getLoanHistory, getLoanDetails, emiCalculator, getEmiSchedule, requestWithdrawal, previewLoanCoupon, getWithdrawalStatus };

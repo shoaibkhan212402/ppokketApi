@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { verifyPAN } = require('../utils/panVerify');
+const { recordSelfieCheck } = require('../utils/selfieCheck');
 
 // POST /api/kyc/upload
 const uploadKYC = async (req, res) => {
@@ -130,6 +131,9 @@ const uploadKYC = async (req, res) => {
       writeLog(`[${new Date().toISOString()}] [uploadKYC] Database insert failed: ${dbErr.message}\nStack: ${dbErr.stack}`);
       throw dbErr;
     }
+
+    // A selfie taken with the live blink check (website, app 1.0.5+) says so
+    if (urls.selfie) await recordSelfieCheck(userId, urls.selfie, req.body?.selfie_liveness);
 
     await pool.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',

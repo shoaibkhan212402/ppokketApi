@@ -2,6 +2,8 @@ require('dotenv').config();
 const multer = require('multer');
 const path   = require('path');
 const fs     = require('fs');
+const { CheckedStorage } = require('../utils/documentFiles');
+const { filesOrigin } = require('../utils/fileUrls');
 
 let storage;
 
@@ -20,7 +22,9 @@ if (hasFtpConfig) {
       user:      process.env.FTP_USER,
       password:  process.env.FTP_PASS,
       port:      process.env.FTP_PORT || 21,
-      rootUrl:   process.env.FTP_ROOT_URL,
+      // The website's address (the FTP files are served there), even when
+      // FTP_ROOT_URL was set to the API's — see utils/fileUrls.js
+      rootUrl:   filesOrigin(),
       uploadDir: process.env.FTP_UPLOAD_DIR || '/uploads/kyc',
     });
     console.log('📁 Storage: FTP —', process.env.FTP_HOST);
@@ -46,7 +50,7 @@ if (!storage && hasCloudinaryConfig) {
     storage = new CloudinaryStorage({
       cloudinary,
       params: async (req, file) => {
-        const folder = `ppokket/kyc/${req.user?.id || 'general'}`;
+        const folder = `ppokket/kyc/${req.uploadUserId || req.user?.id || 'general'}`;
         const isPdf  = file.mimetype === 'application/pdf';
 
         if (isPdf) {
@@ -105,7 +109,10 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({
-  storage,
+  // Every file is checked by its content first: photo-only and PDF-only
+  // documents, no empty / damaged / HEIC / password-locked files, and stored
+  // under the right extension (utils/documentFiles.js)
+  storage: new CheckedStorage(storage),
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 });

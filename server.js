@@ -10,6 +10,7 @@ const { connectDB } = require('./config/db');
 const { connectRedis } = require('./config/redis');
 const { registerJobs } = require('./utils/scheduledJobs');
 const { applySchemaUpgrades } = require('./utils/schemaUpgrades');
+const { filesOrigin, hostOf } = require('./utils/fileUrls');
 
 // Routes
 const authRoutes         = require('./routes/authRoutes');
@@ -102,6 +103,15 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Static uploads serving
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Documents stored over FTP live on the website (ppokket.com/uploads/…), but
+// some saved links point at this API instead (FTP_ROOT_URL was the API's
+// address), and answered 404. Send any upload not found here on to the website.
+app.use('/uploads', (req, res, next) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+  const origin = filesOrigin();
+  if (!hostOf(origin) || hostOf(origin) === String(req.get('host') || '').toLowerCase()) return next();
+  return res.redirect(302, `${origin}/uploads${req.path}`);
+});
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'OK', app: 'Ppokket API', version: '1.0.0' }));

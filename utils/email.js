@@ -170,7 +170,9 @@ const bounceChargesText = `Bounce Charges shall mean penal charges for dishonor 
 /**
  * Generates a loan agreement PDF and sends it via email to the user
  */
-const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
+// `coupon` (optional): what a coupon applied at the withdrawal request takes
+// off — { code, title, discount_total, off_disbursal, off_emis, by_instalment }.
+const sendLoanAgreementEmail = async ({ user, loan, bank, coupon = null }) => {
   const PDFDocument = require('pdfkit');
   try {
     const emailRecipient = user.email || 'customer@ppokket.com';
@@ -217,6 +219,17 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
       loanCharges
     );
 
+    // The coupon's discount on the instalments, as stored with the loan's EMIs
+    if (coupon?.by_instalment) {
+      for (const row of scheduleRows) {
+        const off = Number(coupon.by_instalment[row.installment_no] || 0);
+        if (off > 0) {
+          row.emi_amount = Math.round((parseFloat(row.emi_amount) - off) * 100) / 100;
+          row.emi_charges = Math.max(0, Math.round((row.emi_charges - off) * 100) / 100);
+        }
+      }
+    }
+
     // Common variables
     const principal = parseFloat(loan.amount);
     const term = parseInt(loan.duration_months);
@@ -226,7 +239,7 @@ const sendLoanAgreementEmail = async ({ user, loan, bank }) => {
     const interestAmount = totalRepayable - principal - emiChargesTotal;
     const annualizedROI = (parseFloat(loan.interest_rate) * 12).toFixed(1);
     const effectiveROI = ((interestAmount / principal) * (12 / term) * 100).toFixed(2);
-    const netDisbursal = principal - parseFloat(loan.processing_fee || 0) - disbursalExtras.total;
+    const netDisbursal = principal - parseFloat(loan.processing_fee || 0) - disbursalExtras.total + Number(coupon?.off_disbursal || 0);
     const feesTotal = parseFloat(loan.processing_fee || 0) + disbursalExtras.total + emiChargesTotal;
     // Every charge counts towards the APR: less reaches the borrower, more is repaid
     const apr = ((totalRepayable - netDisbursal) / netDisbursal * (12 / term) * 100).toFixed(1);
@@ -999,7 +1012,7 @@ I hereby further confirm that I understand English Language and agree that all t
       replyTo: 'support@ppokket.com',
       to: emailRecipient,
       subject: `Your Loan Documents are Ready — Ppokket (Ref: ${loan.id})`,
-      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | +91 81780 31447\n\nPpokket Private Limited`,
+      text: `Dear ${borrowerName},\n\nThank you for choosing Ppokket. Your loan documents for Ref ${loan.id} (${formatINR(principal)}, ${term} months) are attached to this email.\n\nKey Details:\n- Principal: ${formatINR(principal)}\n- Interest Rate: ${annualizedROI}% p.a.\n- Processing Fee: ${formatINR(loan.processing_fee)}\n${coupon ? `- Coupon ${coupon.code}: − ${formatINR(coupon.discount_total)}\n` : ''}- Total Repayable: ${formatINR(totalRepayable)}\n- APR: ${apr}%\n\nPlease review all three attached PDFs:\n1. Acknowledgement of Loan Application\n2. Key Facts Statement (KFS)\n3. Sanction Letter & MITC\n\nFor support: support@ppokket.com | +91 81780 31447\n\nPpokket Private Limited`,
       html: `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 650px; margin: auto; padding: 25px; border: 1px solid #e2e8f0; border-radius: 12px; color: #1e293b; line-height: 1.6;">
           <div style="text-align: center; margin-bottom: 25px;">
@@ -1038,6 +1051,7 @@ I hereby further confirm that I understand English Language and agree that all t
             <tr style="border-bottom: 1px solid #f1f5f9; background-color: #f8fafc;"><td style="padding: 8px 12px; color: #475569;">Processing Fee + GST</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(loan.processing_fee)}</td></tr>${[
               ...disbursalExtras.items.map((c) => [`${c.name} (deducted at disbursal)`, formatINR(c.amount)]),
               ...emiExtras.map((c) => [`${c.name} (with every instalment)`, emiExtraText(c)]),
+              ...(coupon ? [[`Coupon ${coupon.code}${coupon.title ? ` — ${coupon.title}` : ''}`, `− ${formatINR(coupon.discount_total)}`]] : []),
             ].map(([label, value]) => `
             <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">${escapeHtml(label)}</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${escapeHtml(value)}</td></tr>`).join('')}
             <tr style="border-bottom: 1px solid #f1f5f9;"><td style="padding: 8px 12px; color: #475569;">Net Disbursed Amount</td><td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatINR(netDisbursal)}</td></tr>
