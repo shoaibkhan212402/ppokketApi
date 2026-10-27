@@ -68,6 +68,7 @@ const handleCustomerDocs = async (req, res, next) => {
   });
 };
 const { getGatewayConfig, setGateway } = require('../controllers/paymentController');
+const { getAadhaarOtpSetting, setAadhaarOtpSetting } = require('../controllers/aadhaarController');
 
 router.use(adminProtect); // All admin routes protected
 
@@ -130,6 +131,10 @@ router.post('/referrals/:id/credit', requirePermission('manage_referrals'), admi
 // system_settings keys, edited via the existing /system-settings endpoints
 router.get('/payment-gateway', requireSuperAdmin, getGatewayConfig);
 router.put('/payment-gateway', requireSuperAdmin, setGateway);
+
+// Aadhaar step with OTP, or number only while the OTP service is down (super_admin only)
+router.get('/aadhaar-otp', requireSuperAdmin, getAadhaarOtpSetting);
+router.put('/aadhaar-otp', requireSuperAdmin, setAadhaarOtpSetting);
 
 // Extra loan charges — at disbursal or on every EMI (super_admin only)
 router.get('/loan-charges', requireSuperAdmin, getLoanCharges);

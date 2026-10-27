@@ -67,18 +67,32 @@ const cleanReferences = (input, ownMobile) => {
 };
 
 // The saved references of several users at once → Map(userId → [refs]).
+// Each carries `verified`: whether the reference confirmed the number with an
+// OTP (utils/referenceOtp.js — its table may not exist yet).
 const referencesOf = async (userIds) => {
   const ids = [...new Set(userIds.filter((id) => id != null))];
   if (!ids.length) return new Map();
   try {
-    const [rows] = await pool.query(
-      'SELECT user_id, slot, name, mobile, relation, updated_at FROM user_references WHERE user_id IN (?) ORDER BY user_id, slot',
-      [ids]
-    );
+    let rows;
+    try {
+      [rows] = await pool.query(
+        `SELECT r.user_id, r.slot, r.name, r.mobile, r.relation, r.updated_at, c.verified_at
+           FROM user_references r
+           LEFT JOIN reference_otp_checks c ON c.user_id = r.user_id AND c.mobile = r.mobile
+          WHERE r.user_id IN (?) ORDER BY r.user_id, r.slot`,
+        [ids]
+      );
+    } catch (err) {
+      if (!isMissingTable(err) || !String(err.message).includes('reference_otp_checks')) throw err;
+      [rows] = await pool.query(
+        'SELECT user_id, slot, name, mobile, relation, updated_at, NULL AS verified_at FROM user_references WHERE user_id IN (?) ORDER BY user_id, slot',
+        [ids]
+      );
+    }
     const byUser = new Map();
-    for (const { user_id, ...ref } of rows) {
+    for (const { user_id, verified_at, ...ref } of rows) {
       if (!byUser.has(user_id)) byUser.set(user_id, []);
-      byUser.get(user_id).push(ref);
+      byUser.get(user_id).push({ ...ref, verified: !!verified_at });
     }
     return byUser;
   } catch (err) {

@@ -39,18 +39,20 @@ const DEV_TEST_MOBILE = process.env.DEV_TEST_MOBILE || '9999999999';
 const DEV_TEST_OTP    = process.env.DEV_TEST_OTP || '123456';
 const isDevTestNumber = (mobile) => mobile === DEV_TEST_MOBILE || (DEV_TEST_MOBILE && mobile === DEV_TEST_MOBILE);
 
-// Send OTP via Orbitel Bulk SMS API
-const sendOtpViaSms = async (mobile, otp) => {
+// Send OTP via Orbitel Bulk SMS API. `template` (optional) sends another
+// DLT-approved message instead of the login one: { templateId, text } with the
+// code already in the text.
+const sendOtpViaSms = async (mobile, otp, template = null) => {
   const user = process.env.ORBITEL_USER;
   const authkey = process.env.ORBITEL_AUTHKEY;
   const sender = process.env.ORBITEL_SENDER;
-  const templateid = process.env.ORBITEL_TEMPLATE_ID;
+  const templateid = template?.templateId || process.env.ORBITEL_TEMPLATE_ID;
 
   if (!user || !authkey || !sender || !templateid) {
     throw new Error('Orbitel SMS gateway not properly configured in environment variables');
   }
 
-  const text = `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
+  const text = template?.text || `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
 
   const url = new URL('https://bulksms.orbitel.in/api/pushsms');
   url.searchParams.set('user', user);
@@ -286,6 +288,8 @@ const handleVerifyAndLogin = async (mobile, otp, res, referralCode = null) => {
       occupation: user.occupation,
       monthly_income: user.monthly_income,
       interest_rate: parseFloat(user.interest_rate) || 2.50,
+      // This server asks for an OTP to each new reference number (utils/referenceOtp.js)
+      reference_otp: true,
     },
   });
 };
@@ -395,5 +399,9 @@ const adminLogin = async (req, res) => {
   }
 };
 
-module.exports = { sendOTP, verifyOTP, demoLogin, adminLogin, isRefusedPassword };
+module.exports = {
+  sendOTP, verifyOTP, demoLogin, adminLogin, isRefusedPassword,
+  // Also used to check a customer's reference numbers (utils/referenceOtp.js)
+  sendOtpViaSms, generateOTP, isDevTestNumber, DEV_TEST_OTP,
+};
 

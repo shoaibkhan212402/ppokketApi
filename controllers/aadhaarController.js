@@ -1,6 +1,36 @@
 const { pool } = require('../config/db');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { aadhaarSendOTP, aadhaarVerifyOTP } = require('../utils/aadhaarVerify');
+const {
+  isAadhaarOtpOn, aadhaarOtpOnOrDefault, setAadhaarOtpOn,
+  saveAadhaarWithoutOtp, clearWithoutOtp, isWithoutOtp, countWithoutOtp,
+} = require('../utils/aadhaarMode');
+const { notArchivedSql } = require('../utils/archive');
+const { auditLog } = require('../utils/audit');
+
+// ─────────────────────────────────────────────────────────────
+// POST /api/aadhaar/save-number
+// Body: { aadhaar_number }
+// The Aadhaar step without OTP — only while the super admin has
+// switched the OTP off (utils/aadhaarMode.js).
+// ─────────────────────────────────────────────────────────────
+const saveNumber = async (req, res) => {
+  try {
+    if (await isAadhaarOtpOn()) {
+      return res.status(409).json({
+        success: false,
+        otp_required: true,
+        message: 'Please verify your Aadhaar with the OTP sent to your Aadhaar-linked mobile number.',
+      });
+    }
+    const saved = await saveAadhaarWithoutOtp(req.user.id, req.body?.aadhaar_number);
+    if (!saved.ok) return res.status(saved.status).json({ success: false, message: saved.message });
+    return res.json({ success: true, aadhaar_saved: true, message: 'Aadhaar number saved. Please continue with the next step.' });
+  } catch (err) {
+    console.error('[saveNumber]', err.message);
+    return res.status(500).json({ success: false, message: 'Could not save your Aadhaar number. Please try again.' });
+  }
+};
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/aadhaar/send-otp
@@ -22,6 +52,21 @@ const sendOTP = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Aadhaar number is required. Please add it to your profile first.',
+      });
+    }
+
+    // OTP switched off by the super admin: the number alone completes the step.
+    // Reached by app versions from before the switch (they only know "send
+    // OTP"), and by a page opened before it was switched. Such an app shows
+    // any reply other than "OTP sent" as an error, so this one is worded as
+    // what happened and what to do; newer clients read `aadhaar_saved`.
+    if (!(await isAadhaarOtpOn())) {
+      const saved = await saveAadhaarWithoutOtp(userId, aadhaar_number);
+      if (!saved.ok) return res.status(saved.status).json({ success: false, message: saved.message });
+      return res.json({
+        success: false,
+        aadhaar_saved: true,
+        message: 'Your Aadhaar number is saved. No OTP is needed right now — please go back and open KYC again to continue.',
       });
     }
 
@@ -133,6 +178,8 @@ const verifyOTP = async (req, res) => {
     await pool.query(
       'UPDATE users SET aadhaar_verified = 1 WHERE id = ?', [userId]
     );
+    // Verified by OTP now, so no longer "number only"
+    await clearWithoutOtp(userId);
 
     // Save Aadhaar KYC record (address, photo, etc.)
     await pool.query(
@@ -216,7 +263,11 @@ const getAadhaarStatus = async (req, res) => {
     );
 
     if (!rows.length) {
-      return res.json({ success: true, verified: false, data: null });
+      return res.json({
+        success: true, verified: false, data: null,
+        otp_enabled: await aadhaarOtpOnOrDefault(),
+        without_otp: await isWithoutOtp(userId),
+      });
     }
 
     const row = rows[0];
@@ -245,4 +296,52 @@ const getAadhaarStatus = async (req, res) => {
   }
 };
 
-module.exports = { sendOTP, verifyOTP, getAadhaarStatus };
+// ─────────────────────────────────────────────────────────────
+// Admin → Settings → KYC (super admin)
+// GET /api/admin/aadhaar-otp          → { enabled, without_otp_count, waiting_count }
+// PUT /api/admin/aadhaar-otp { enabled: true|false }
+// ─────────────────────────────────────────────────────────────
+const aadhaarOtpConfig = async () => {
+  const [[waiting]] = await pool.query(
+    `SELECT COUNT(*) AS n FROM users u
+      WHERE u.pan_verified = 1 AND COALESCE(u.aadhaar_verified, 0) = 0${await notArchivedSql('u')}`
+  );
+  return {
+    enabled: await isAadhaarOtpOn(),
+    without_otp_count: await countWithoutOtp(),
+    // Customers who finished PAN and stopped at the Aadhaar step
+    waiting_count: Number(waiting.n),
+  };
+};
+
+const getAadhaarOtpSetting = async (req, res) => {
+  try {
+    res.json({ success: true, ...(await aadhaarOtpConfig()) });
+  } catch (err) {
+    console.error('[getAadhaarOtpSetting]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const setAadhaarOtpSetting = async (req, res) => {
+  try {
+    const { enabled } = req.body || {};
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'Say whether Aadhaar OTP should be on or off.' });
+    }
+    await setAadhaarOtpOn(enabled);
+    await auditLog({ req, action: 'aadhaar_otp_switched', entityType: 'setting', details: { aadhaar_otp_enabled: enabled } });
+    res.json({
+      success: true,
+      message: enabled
+        ? 'Aadhaar OTP is on. New customers verify their Aadhaar with an OTP.'
+        : 'Aadhaar OTP is off. New customers only enter their Aadhaar number.',
+      ...(await aadhaarOtpConfig()),
+    });
+  } catch (err) {
+    console.error('[setAadhaarOtpSetting]', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = { sendOTP, verifyOTP, saveNumber, getAadhaarStatus, getAadhaarOtpSetting, setAadhaarOtpSetting };

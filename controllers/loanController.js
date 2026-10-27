@@ -440,8 +440,10 @@ const requestWithdrawal = async (req, res) => {
 
     // Fetch user and bank details for email/notification
     const [userRows] = await pool.query(
-      `SELECT u.fcm_token, u.full_name, u.email, u.mobile, a.full_address 
-       FROM users u 
+      // The address from the Aadhaar OTP, else the one on the profile
+      // (a customer who gave their Aadhaar number without OTP has no Aadhaar data)
+      `SELECT u.fcm_token, u.full_name, u.email, u.mobile, COALESCE(a.full_address, u.full_address) AS full_address
+       FROM users u
        LEFT JOIN aadhaar_kyc a ON u.id = a.user_id 
        WHERE u.id = ?`, 
       [userId]

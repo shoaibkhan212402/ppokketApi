@@ -14,6 +14,7 @@ const {
 const { getEmployment, attachEmployment, withoutDocument } = require('../utils/employment');
 const { getReferences, attachReferences, maskReferences } = require('../utils/references');
 const { attachSelfieChecks } = require('../utils/selfieCheck');
+const { attachAadhaarWithoutOtp, isWithoutOtp } = require('../utils/aadhaarMode');
 const { attachCoupons, couponOffDisbursal } = require('../utils/coupons');
 const { notArchivedSql, archivedCount } = require('../utils/archive');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
@@ -267,6 +268,8 @@ const getLeadKycDetails = async (req, res) => {
     kyc.employment = withoutDocument(await getEmployment(userId));
     const references = await getReferences(userId);
     kyc.references = isPartner ? maskReferences(references) : references;
+    // Aadhaar step done with the number alone (OTP switched off at the time)
+    kyc.aadhaar_without_otp = await isWithoutOtp(userId);
     hideIdNumbers(req.admin, [kyc]);
     res.json({ success: true, kyc });
   } catch (err) {
@@ -747,6 +750,8 @@ const getPendingKYC = async (req, res) => {
     await attachReferences(kycs, 'user_id');
     if (isPartner) for (const kyc of kycs) kyc.references = maskReferences(kyc.references);
     await attachSelfieChecks(kycs, 'user_id');
+    // Aadhaar number given without OTP — before the number is masked
+    await attachAadhaarWithoutOtp(kycs, 'user_id');
     hideIdNumbers(req.admin, kycs);
     res.json({ success: true, kycs });
   } catch (err) {

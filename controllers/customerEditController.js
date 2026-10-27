@@ -3,6 +3,7 @@ const { delCache, invalidateUserCache } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter } = require('../utils/employment');
 const { cleanReferences, getReferences, saveReferences } = require('../utils/references');
+const { isWithoutOtp } = require('../utils/aadhaarMode');
 
 // Super admin: correct a customer's details and upload / replace their
 // documents when something is missing or wrong. Everything goes through the
@@ -46,6 +47,8 @@ const getCustomerEditData = async (req, res) => {
         monthly_income: user.monthly_income == null ? null : Number(user.monthly_income),
         pan_verified: !!user.pan_verified,
         aadhaar_verified: !!user.aadhaar_verified,
+        // The customer gave the number while Aadhaar OTP was switched off
+        aadhaar_without_otp: !!user.aadhaar_verified && await isWithoutOtp(userId),
       },
       bank: bank ? { ...bank, is_verified: !!bank.is_verified } : null,
       employment,

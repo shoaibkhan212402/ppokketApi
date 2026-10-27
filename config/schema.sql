@@ -457,6 +457,16 @@ CREATE TABLE IF NOT EXISTS user_references (
   PRIMARY KEY (user_id, slot)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- REFERENCE OTP CHECKS (reference numbers the reference confirmed with an OTP
+-- the customer typed in; a new or changed reference number cannot be saved
+-- without one). Created by the server on first use (utils/referenceOtp.js).
+CREATE TABLE IF NOT EXISTS reference_otp_checks (
+  user_id     INT NOT NULL,
+  mobile      VARCHAR(10) NOT NULL,
+  verified_at DATETIME NOT NULL,
+  PRIMARY KEY (user_id, mobile)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- USER ARCHIVE (Admin → Archive: customers set aside by the super admin, e.g.
 -- KYC left half done; hidden from the admin's working lists only). Created by
 -- the server on first use (utils/archive.js); a customer who carries on leaves it.
@@ -477,6 +487,17 @@ CREATE TABLE IF NOT EXISTS kyc_selfie_checks (
   selfie     VARCHAR(500) NOT NULL,              -- the selfie file that passed
   method     VARCHAR(20) NOT NULL,               -- blink
   checked_at DATETIME NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- AADHAAR WITHOUT OTP (customers who completed the Aadhaar step by typing the
+-- number alone, while the super admin had Aadhaar OTP switched off — Admin →
+-- Settings → KYC, system_settings.aadhaar_otp_enabled). Shown to the admin as
+-- "Number only, no OTP". Created by the server on first use (utils/aadhaarMode.js);
+-- a later OTP verification removes the row.
+CREATE TABLE IF NOT EXISTS aadhaar_without_otp (
+  user_id        INT NOT NULL PRIMARY KEY,
+  aadhaar_number VARCHAR(12) NOT NULL,           -- the number given; the mark only counts while users.aadhaar_number is still this
+  created_at     DATETIME NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- EMI CHARGE ITEMS (what each instalment was charged on top of principal and

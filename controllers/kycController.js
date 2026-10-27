@@ -2,6 +2,11 @@ const { pool } = require('../config/db');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { verifyPAN } = require('../utils/panVerify');
 const { recordSelfieCheck } = require('../utils/selfieCheck');
+const { aadhaarOtpOnOrDefault, isWithoutOtp } = require('../utils/aadhaarMode');
+
+// Whether the Aadhaar step asks for an OTP right now (Admin → Settings → KYC).
+// Read on every request, outside the cached part, so a switch shows at once.
+const withAadhaarMode = async (response) => ({ ...response, aadhaar_otp_enabled: await aadhaarOtpOnOrDefault() });
 
 // POST /api/kyc/upload
 const uploadKYC = async (req, res) => {
@@ -157,7 +162,7 @@ const getKYCStatus = async (req, res) => {
   try {
     const cacheKey = `user:${req.user.id}:kyc`;
     const cached = await getCache(cacheKey);
-    if (cached) return res.json(cached);
+    if (cached) return res.json(await withAadhaarMode(cached));
 
     const [rows] = await pool.query(
       `SELECT id, status, aadhaar_front, aadhaar_back, pan_card, selfie, bank_passbook,
@@ -196,8 +201,10 @@ const getKYCStatus = async (req, res) => {
         is_kyc_verified: !!(userRows[0]?.is_kyc_verified),
       };
     }
+    // The Aadhaar step was done with the number alone (OTP switched off)
+    response.aadhaar_without_otp = response.aadhaar_verified ? await isWithoutOtp(req.user.id) : false;
     await setCache(cacheKey, response, CACHE_TTL.MEDIUM);
-    res.json(response);
+    res.json(await withAadhaarMode(response));
   } catch (err) {
     console.error('[getKYCStatus]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -244,7 +251,12 @@ const autoVerifyKYC = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please complete PAN verification first.' });
     }
     if (!aadhaar_verified) {
-      return res.status(400).json({ success: false, message: 'Please complete Aadhaar OTP verification first.' });
+      return res.status(400).json({
+        success: false,
+        message: (await aadhaarOtpOnOrDefault())
+          ? 'Please complete Aadhaar OTP verification first.'
+          : 'Please enter your Aadhaar number first.',
+      });
     }
 
     const [bankRows] = await pool.query('SELECT is_verified FROM bank_details WHERE user_id = ?', [userId]);

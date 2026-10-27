@@ -8,6 +8,7 @@ const { defaultFirstEmiDate } = require('../utils/loanUtils');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
 const { companyNames } = require('../utils/companies');
 const { cleanReferences, getReferences, saveReferences, isReferencesUnavailable } = require('../utils/references');
+const { sendReferenceOtp, verifyReferenceOtp, firstUnverifiedReference } = require('../utils/referenceOtp');
 
 // Where the customer works (company, designation, experience, GST number,
 // offer letter) and their two reference contacts, added to the profile the
@@ -18,6 +19,8 @@ const addEmployment = async (user) => {
   user.employment_unavailable = isEmploymentUnavailable();
   user.references = await getReferences(user.id);
   user.references_unavailable = isReferencesUnavailable();
+  // A new or changed reference number has to be confirmed with an OTP first
+  user.reference_otp = true;
 };
 
 // The extra charges (Admin → Charges) a loan approved now would carry, in the
@@ -167,6 +170,18 @@ const updateProfile = async (req, res) => {
       } catch (err) {
         if (err.isValidation) return res.status(400).json({ success: false, message: err.message });
         throw err;
+      }
+      // Every new or changed number must have been confirmed with an OTP
+      // (POST /api/user/references/send-otp + verify-otp). Numbers saved
+      // before this check existed are left as they are.
+      const unverified = await firstUnverifiedReference(req.user.id, references, await getReferences(req.user.id));
+      if (unverified) {
+        return res.status(400).json({
+          success: false,
+          reference_otp_needed: unverified.slot,
+          message: `Reference ${unverified.slot}: please verify +91 ${unverified.mobile} with the OTP sent to that number. `
+            + "If you don't see a Verify button, please update the Ppokket app.",
+        });
       }
     }
 
@@ -651,5 +666,49 @@ const getCompanies = (req, res) => {
   res.json({ success: true, companies: companyNames() });
 };
 
-module.exports = { getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard, getNotifications, markNotificationsRead, getUserCreditDetails };
+// ── Reference numbers confirmed with an OTP (utils/referenceOtp.js) ─────────
+const referenceOtpUser = async (userId) => {
+  const [[me]] = await pool.query('SELECT id, mobile, full_name FROM users WHERE id = ?', [userId]);
+  return me;
+};
+
+// POST /api/user/references/send-otp   { mobile }
+const sendReferenceOtpHandler = async (req, res) => {
+  try {
+    const me = await referenceOtpUser(req.user.id);
+    if (!me) return res.status(404).json({ success: false, message: 'User not found' });
+    const result = await sendReferenceOtp(me, req.body?.mobile);
+    if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+    res.json({
+      success: true,
+      already_verified: !!result.already_verified,
+      message: result.already_verified
+        ? 'This number is already verified.'
+        : `OTP sent to +91 ${result.mobile}. Ask them for the code.`,
+    });
+  } catch (err) {
+    console.error('[sendReferenceOtp]', err.message);
+    res.status(500).json({ success: false, message: 'Could not send the OTP. Please try again.' });
+  }
+};
+
+// POST /api/user/references/verify-otp   { mobile, otp }
+const verifyReferenceOtpHandler = async (req, res) => {
+  try {
+    const me = await referenceOtpUser(req.user.id);
+    if (!me) return res.status(404).json({ success: false, message: 'User not found' });
+    const result = await verifyReferenceOtp(me, req.body?.mobile, req.body?.otp);
+    if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+    await invalidateUserCache(req.user.id);
+    res.json({ success: true, verified: true, mobile: result.mobile, message: 'Number verified.' });
+  } catch (err) {
+    console.error('[verifyReferenceOtp]', err.message);
+    res.status(500).json({ success: false, message: 'Could not check the OTP. Please try again.' });
+  }
+};
+
+module.exports = {
+  getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard,
+  getNotifications, markNotificationsRead, getUserCreditDetails, sendReferenceOtpHandler, verifyReferenceOtpHandler,
+};
 
