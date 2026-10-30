@@ -2,6 +2,7 @@ const { pool } = require('../config/db');
 const { delCache, invalidateUserCache } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter } = require('../utils/employment');
+const { checkGstinBeforeSave } = require('../utils/gstVerify');
 const { cleanReferences, getReferences, saveReferences } = require('../utils/references');
 const { isWithoutOtp } = require('../utils/aadhaarMode');
 
@@ -143,6 +144,11 @@ const updateCustomerDetails = async (req, res) => {
     const bank = body.bank ? cleanBank(body.bank) : null;
     const [[oldBank]] = await conn.query('SELECT * FROM bank_details WHERE user_id = ?', [userId]);
     const bankChanged = !!(bank && oldBank && (oldBank.account_number !== bank.account_number || oldBank.ifsc_code !== bank.ifsc_code));
+    // A new GST number must exist on the GST portal (only while QuickeKYC is on)
+    if (employment?.gst_number) {
+      const gst = await checkGstinBeforeSave(userId, employment.gst_number, (await getEmployment(userId))?.gst_number ?? null);
+      if (!gst.ok) throw invalid(gst.message);
+    }
 
     const changes = {};
     await conn.beginTransaction();

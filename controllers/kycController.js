@@ -364,8 +364,10 @@ const panVerifyEndpoint = async (req, res) => {
       });
     }
 
-    // Step 4 — Date of Birth must match PAN records
-    if (result.dob_match !== true) {
+    // Step 4 — Date of Birth must match PAN records. QuickeKYC answers with the
+    // holder's details instead of a yes/no; if those carry no date of birth
+    // (dobUnchecked) there is nothing to compare, and the name match stands.
+    if (result.dob_match !== true && !result.dobUnchecked) {
       return res.status(400).json({
         success: false, verified: false,
         message: 'Date of Birth does not match PAN records. Ensure it exactly matches your PAN card.',

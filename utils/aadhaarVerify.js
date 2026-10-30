@@ -1,4 +1,5 @@
 const axios = require('axios');
+const quickekyc = require('./quickekyc');
 
 const BASE_URL   = 'https://apitxt.com/api';
 const AUTH_KEY   = () => process.env.APITXT_AUTHKEY || '';
@@ -68,6 +69,8 @@ const aadhaarSendOTP = async (aadhaarNumber) => {
       errorCode: 203, raw: null,
     };
   }
+
+  if (quickekyc.isQuickeKycOn()) return sendOtpQuickeKyc(clean);
 
   if (!authKey) {
     if (process.env.NODE_ENV === 'production') {
@@ -176,6 +179,8 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
       requestId: null, message: 'Invalid OTP. Must be exactly 6 digits.', errorCode: 204, raw: null,
     };
   }
+
+  if (quickekyc.isQuickeKycOn()) return verifyOtpQuickeKyc(referenceId, otp);
 
   if (!authKey) {
     if (process.env.NODE_ENV === 'production') {
@@ -286,6 +291,117 @@ const aadhaarVerifyOTP = async (referenceId, otp) => {
     message:     d.verified ? null : 'OTP could not be verified. Please check the OTP, or request a new one and enter it within 10 minutes.',
     errorCode:   null,
     raw,
+  };
+};
+
+// ── QuickeKYC ───────────────────────────────────────────────────────────────
+// Same two steps through QuickeKYC: generate-otp answers with a request_id,
+// which submit-otp needs back together with the OTP. No mock answers here —
+// a failure is always shown as a failure (the APItxt mock once wrote fake
+// verifications to the live database from a development machine).
+
+const notVerified = (message, errorCode, requestId = null, raw = null) => ({
+  success: false, verified: false, name: null, dob: null, gender: null,
+  careOf: null, fullAddress: null, address: null, photo: null, hasPhoto: false,
+  requestId, message, errorCode, raw,
+});
+
+const sendOtpQuickeKyc = async (clean) => {
+  const r = await quickekyc.call('/aadhaar-v2/generate-otp', { id_number: clean }, { label: 'Aadhaar OTP', timeout: 30000 });
+  const failed = (message) => ({
+    success: false, referenceId: null, maskedAadhaar: null,
+    requestId: r.requestId, message, errorCode: r.statusCode, raw: r.raw,
+  });
+
+  if (!r.ok) return failed(r.message || 'Could not send the Aadhaar OTP. Please check the number and try again.');
+
+  const d = r.data;
+  if (quickekyc.yesNo(d.otp_sent) === false || quickekyc.yesNo(d.valid_aadhaar) === false) {
+    return failed(quickekyc.yesNo(d.if_number) === false
+      ? 'No mobile number is linked to this Aadhaar, so an OTP cannot be sent. Please link a mobile number at an Aadhaar centre.'
+      : (r.message || 'Could not send the Aadhaar OTP. Please try again.'));
+  }
+
+  const referenceId = quickekyc.pick(d, 'request_id') || r.requestId || quickekyc.pick(d, 'client_id', 'reference_id');
+  if (!referenceId) {
+    console.error('[Aadhaar SendOTP] QuickeKYC said success but gave no request_id');
+    return failed('Could not start Aadhaar verification. Please try again.');
+  }
+
+  return {
+    success:       true,
+    referenceId:   String(referenceId),
+    maskedAadhaar: `XXXX-XXXX-${clean.slice(-4)}`,
+    requestId:     r.requestId,
+    message:       null,
+    errorCode:     null,
+    raw:           r.raw,
+  };
+};
+
+const ADDRESS_ORDER = ['house', 'street', 'lm', 'loc', 'vtc', 'po', 'subdist', 'dist', 'state'];
+
+const verifyOtpQuickeKyc = async (referenceId, otp) => {
+  // UIDAI can be slow to answer the verify step
+  const r = await quickekyc.call('/aadhaar-v2/submit-otp', { request_id: String(referenceId), otp: String(otp) }, { label: 'Aadhaar OTP verification', timeout: 45000 });
+
+  if (!r.ok) {
+    console.warn('[Aadhaar VerifyOTP] QuickeKYC rejected ref', referenceId, '-', r.message);
+    return notVerified(
+      r.message || 'OTP could not be verified. Please check the OTP, or request a new one and enter it within 10 minutes.',
+      r.statusCode, r.requestId, r.raw
+    );
+  }
+
+  const d = r.data;
+  const name = quickekyc.pick(d, 'full_name', 'name');
+  if (!name) {
+    console.warn('[Aadhaar VerifyOTP] QuickeKYC success without a name, ref', referenceId);
+    return notVerified('Aadhaar details could not be read. Please request a new OTP and try again.', null, r.requestId, r.raw);
+  }
+
+  // Stored in the same shape the APItxt answers had
+  const a = d.address && typeof d.address === 'object' ? d.address : {};
+  const address = {
+    house:   quickekyc.pick(a, 'house') || '',
+    street:  quickekyc.pick(a, 'street') || '',
+    lm:      quickekyc.pick(a, 'landmark', 'lm') || '',
+    loc:     quickekyc.pick(a, 'loc', 'locality') || '',
+    vtc:     quickekyc.pick(a, 'vtc') || '',
+    po:      quickekyc.pick(a, 'po') || '',
+    subdist: quickekyc.pick(a, 'subdist', 'sub_district') || '',
+    dist:    quickekyc.pick(a, 'dist', 'district') || '',
+    state:   quickekyc.pick(a, 'state') || '',
+    pc:      String(quickekyc.pick(d, 'zip', 'pincode') || quickekyc.pick(a, 'pc', 'zip', 'pincode') || ''),
+  };
+  const fromParts = ADDRESS_ORDER.map((k) => address[k]).filter(Boolean).join(', ');
+  const fullAddress = quickekyc.pick(d, 'full_address')
+    || (typeof d.address === 'string' ? d.address.trim() : null)
+    || (fromParts ? fromParts + (address.pc ? ` - ${address.pc}` : '') : null);
+
+  // The controller stores the date with STR_TO_DATE(?, '%d-%m-%Y')
+  const ymd = quickekyc.toYmd(quickekyc.pick(d, 'dob', 'date_of_birth'));
+  const dob = ymd ? ymd.split('-').reverse().join('-') : null;
+
+  // Plain base64 JPEG, like APItxt sent (without a "data:image/...;base64," prefix)
+  const image = quickekyc.pick(d, 'profile_image', 'photo', 'image');
+  const photo = typeof image === 'string' ? image.replace(/^data:image\/\w+;base64,/, '') : null;
+
+  return {
+    success:     true,
+    verified:    true,
+    name,
+    dob,
+    gender:      quickekyc.pick(d, 'gender'),
+    careOf:      quickekyc.pick(d, 'care_of', 'careof'),
+    fullAddress,
+    address,
+    photo,
+    hasPhoto:    !!photo,
+    requestId:   r.requestId || String(referenceId),
+    message:     null,
+    errorCode:   null,
+    raw:         r.raw,
   };
 };
 

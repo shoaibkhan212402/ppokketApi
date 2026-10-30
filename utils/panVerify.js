@@ -1,4 +1,6 @@
 const axios = require('axios');
+const quickekyc = require('./quickekyc');
+const { compareName } = require('./bankVerify');
 
 const APITXT_PAN_URL = 'https://apitxt.com/api/panVerify';
 const AUTH_KEY = () => process.env.APITXT_AUTHKEY || '';
@@ -91,6 +93,16 @@ const verifyPAN = async ({ pan, name, dob }) => {
     };
   }
 
+  if (quickekyc.isQuickeKycOn()) {
+    try {
+      return await verifyPanQuickeKyc({ panClean, nameClean, dobClean });
+    } catch (err) {
+      // No PAN service enabled on the QuickeKYC account: APItxt, as before
+      if (!err.notAllowed) throw err;
+      console.warn('[PAN Verify] no PAN service is enabled on QuickeKYC — using APItxt.');
+    }
+  }
+
   if (!authKey) {
     return {
       success: false, verified: false,
@@ -146,6 +158,73 @@ const verifyPAN = async ({ pan, name, dob }) => {
     message: d.message || null,
     errorCode: null,
     raw,
+  };
+};
+
+// A PAN status from QuickeKYC that means the card must not be used. Anything
+// else ("valid", "Existing and Valid", no status at all) does not block.
+const BLOCKED_PAN_STATUS = /invalid|deactivat|delet|fake|surrender|cancel/i;
+
+/**
+ * The same check through QuickeKYC. Its PAN endpoint takes only the PAN and
+ * answers with the holder's details, so name and date of birth are compared
+ * here: the name with the same rule as the bank account holder (compareName),
+ * the date exactly. Same result shape as the APItxt path.
+ */
+// PAN Advance may also give the date of birth; the basic PAN check gives the
+// name only (pan_number, full_name, category — seen 2026-10-28). Advance is
+// tried first; while QuickeKYC says it is not enabled on the account
+// (quickekyc.js remembers that for an hour) the basic check is used.
+const lookupPan = async (panClean) => {
+  const opts = { label: 'PAN verification', timeout: 20000 };
+  try {
+    return await quickekyc.call('/pan/pan_advance', { id_number: panClean }, opts);
+  } catch (err) {
+    if (!err.notAllowed) throw err;
+    return quickekyc.call('/pan/pan', { id_number: panClean }, opts);
+  }
+};
+
+const verifyPanQuickeKyc = async ({ panClean, nameClean, dobClean }) => {
+  const r = await lookupPan(panClean);
+
+  if (!r.ok) {
+    return {
+      success: false, verified: false,
+      panNumber: null, fullName: null, category: null, dob: null, dobMySQL: null,
+      gender: null, mobileNo: null, email: null, address: null,
+      requestId: r.requestId, message: r.message || 'PAN could not be verified. Please check the PAN number.',
+      errorCode: r.statusCode, raw: r.raw,
+    };
+  }
+
+  const d = r.data;
+  const fullName = quickekyc.pick(d, 'full_name', 'name', 'registered_name', 'name_on_card');
+  const panDob = quickekyc.toYmd(quickekyc.pick(d, 'dob', 'date_of_birth'));
+  const typedDob = convertDobToMySQL(dobClean);
+  const status = quickekyc.pick(d, 'pan_status', 'status');
+  const blocked = typeof status === 'string' && BLOCKED_PAN_STATUS.test(status);
+
+  if (!panDob) console.warn('[PAN Verify] QuickeKYC gave no date of birth for request', r.requestId || '');
+
+  return {
+    success: true,
+    verified: !!fullName,
+    panStatus: blocked ? status.toLowerCase() : 'valid',
+    name_match: fullName ? compareName(fullName, nameClean).match : false,
+    dob_match: panDob ? panDob === typedDob : null,
+    // QuickeKYC did not say the date of birth, so there was nothing to compare
+    dobUnchecked: !panDob,
+    panNumber: quickekyc.pick(d, 'pan_number', 'pan', 'id_number') || panClean,
+    fullName: fullName || null,
+    category: quickekyc.pick(d, 'category') || 'individual',
+    dob: dobClean,
+    dobMySQL: typedDob,
+    gender: quickekyc.pick(d, 'gender'),
+    requestId: r.requestId,
+    message: fullName ? null : 'PAN details could not be read. Please try again.',
+    errorCode: null,
+    raw: r.raw,
   };
 };
 

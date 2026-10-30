@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const { normalizeGstin, isValidGstin } = require('./gst');
+const { gstChecksOf, gstCheckView } = require('./gstVerify');
 
 // Where a customer works — asked with the profile at onboarding and shown on
 // their profile and to the admin: the employer (or their own business), their
@@ -71,13 +72,15 @@ const cleanEmployment = (input) => {
 };
 
 const num = (value) => (value == null ? null : Number(value));
-const shape = (row) => ({
+// `gstCheck` is the saved GST portal check for this user (utils/gstVerify.js)
+const shape = (row, gstCheck) => ({
   company_name: row.company_name,
   designation: row.designation,
   experience_years: num(row.experience_years),
   current_job_years: num(row.current_job_years),
   office_city: row.office_city,
   gst_number: row.gst_number ?? null,
+  gst_check: gstCheckView(gstCheck, row.gst_number),
   offer_letter: row.offer_letter,
   offer_letter_at: row.offer_letter_at,
   updated_at: row.updated_at,
@@ -89,7 +92,9 @@ const employmentOf = async (userIds) => {
   if (!ids.length) return new Map();
   try {
     const [rows] = await pool.query('SELECT * FROM user_employment WHERE user_id IN (?)', [ids]);
-    return new Map(rows.map((row) => [row.user_id, shape(row)]));
+    const withGst = rows.filter((row) => row.gst_number).map((row) => row.user_id);
+    const gstChecks = await gstChecksOf(withGst);
+    return new Map(rows.map((row) => [row.user_id, shape(row, gstChecks.get(row.user_id))]));
   } catch (err) {
     if (!isMissingTable(err)) console.error('[employment] could not read employment details:', err.message);
     return new Map();

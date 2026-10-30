@@ -6,6 +6,7 @@ const { sendWelcomeEmail } = require('../utils/email');
 const { loadChargeContext, chargesAsOf, plainCharges, attachLoanCharges, attachEmiCharges } = require('../utils/loanCharges');
 const { defaultFirstEmiDate } = require('../utils/loanUtils');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
+const { checkGstinBeforeSave } = require('../utils/gstVerify');
 const { companyNames } = require('../utils/companies');
 const { cleanReferences, getReferences, saveReferences, isReferencesUnavailable } = require('../utils/references');
 const { sendReferenceOtp, verifyReferenceOtp, firstUnverifiedReference } = require('../utils/referenceOtp');
@@ -157,6 +158,12 @@ const updateProfile = async (req, res) => {
       } catch (err) {
         if (err.isValidation) return res.status(400).json({ success: false, message: err.message });
         throw err;
+      }
+      // A new GST number must exist on the GST portal (only while QuickeKYC is on)
+      if (employment?.gst_number) {
+        const stored = (await getEmployment(req.user.id))?.gst_number ?? null;
+        const gst = await checkGstinBeforeSave(req.user.id, employment.gst_number, stored);
+        if (!gst.ok) return res.status(400).json({ success: false, field: 'gst_number', message: gst.message });
       }
     }
 

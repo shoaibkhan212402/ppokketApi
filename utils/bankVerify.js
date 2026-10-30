@@ -1,4 +1,5 @@
 const axios = require('axios');
+const quickekyc = require('./quickekyc');
 
 const BASE_URL = 'https://apitxt.com/api';
 const AUTH_KEY = () => process.env.APITXT_AUTHKEY || '';
@@ -73,6 +74,8 @@ const verifyBankAccount = async ({ ifsc, accountNumber, name, mobile, useCache =
   if (!accClean) {
     return { success: false, verified: false, accountExists: false, message: 'Account number is required.', errorCode: 110 };
   }
+  if (quickekyc.isQuickeKycOn()) return verifyBankQuickeKyc({ ifscClean, accClean });
+
   if (!authKey) {
     return {
       success: false, verified: false, accountExists: false,
@@ -120,6 +123,47 @@ const verifyBankAccount = async ({ ifsc, accountNumber, name, mobile, useCache =
     message:         d.message          || null,
     errorCode:       null,
     raw,
+  };
+};
+
+/**
+ * The same check through QuickeKYC (penny drop). It takes only the account
+ * number and IFSC and answers with the name the bank holds; the caller
+ * compares that name. The account number and IFSC are returned as sent —
+ * QuickeKYC may mask them, which would look like a mismatch.
+ */
+const verifyBankQuickeKyc = async ({ ifscClean, accClean }) => {
+  const r = await quickekyc.call('/bank-verification', { id_number: accClean, ifsc: ifscClean }, { label: 'Bank verification', timeout: 30000 });
+
+  const none = {
+    ifsc: null, accountNumber: null, nameAtBank: null, utr: null, amountDeposited: null,
+  };
+  if (!r.ok) {
+    return {
+      success: false, verified: false, accountExists: false, ...none,
+      requestId: r.requestId, message: r.message || 'Bank account could not be verified.',
+      errorCode: r.statusCode, raw: r.raw,
+    };
+  }
+
+  const d = r.data;
+  const nameAtBank = quickekyc.pick(d, 'full_name', 'name_at_bank', 'account_holder_name', 'beneficiary_name', 'name_as_per_bank', 'name');
+  const said = quickekyc.yesNo(d.account_exists);
+  const accountExists = said === null ? !!nameAtBank : said;
+
+  return {
+    success:         true,
+    verified:        accountExists,
+    ifsc:            ifscClean,
+    accountNumber:   accClean,
+    accountExists,
+    nameAtBank:      nameAtBank || null,
+    utr:             quickekyc.pick(d, 'utr', 'bank_ref_no'),
+    amountDeposited: null,
+    requestId:       r.requestId,
+    message:         quickekyc.pick(d, 'remarks', 'message'),
+    errorCode:       null,
+    raw:             r.raw,
   };
 };
 
