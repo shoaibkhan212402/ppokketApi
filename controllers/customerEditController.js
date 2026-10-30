@@ -3,6 +3,7 @@ const { delCache, invalidateUserCache } = require('../config/redis');
 const { auditLog } = require('../utils/audit');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter } = require('../utils/employment');
 const { checkGstinBeforeSave } = require('../utils/gstVerify');
+const { listKycChecks, getKycCheck } = require('../utils/kycChecks');
 const { cleanReferences, getReferences, saveReferences } = require('../utils/references');
 const { isWithoutOtp } = require('../utils/aadhaarMode');
 
@@ -250,4 +251,30 @@ const uploadCustomerDocuments = async (req, res) => {
   }
 };
 
-module.exports = { getCustomerEditData, updateCustomerDetails, uploadCustomerDocuments };
+// GET /api/admin/users/:userId/kyc-checks — every PAN / Aadhaar / bank / IFSC /
+// GST check of the customer, newest first, without the full answers.
+const getCustomerKycChecks = async (req, res) => {
+  try {
+    const checks = await listKycChecks(Number(req.params.userId));
+    res.json({ success: true, checks });
+  } catch (err) {
+    fail(res, err, 'getCustomerKycChecks');
+  }
+};
+
+// GET /api/admin/users/:userId/kyc-checks/:checkId — one check with the
+// provider's complete answer (Aadhaar ones include the photo and address).
+// Opening one is written to the audit log.
+const getCustomerKycCheck = async (req, res) => {
+  try {
+    const userId = Number(req.params.userId);
+    const check = await getKycCheck(Number(req.params.checkId));
+    if (!check || check.user_id !== userId) return res.status(404).json({ success: false, message: 'Check not found' });
+    await auditLog({ req, action: 'kyc_check_viewed', entityType: 'user', entityId: userId, details: { check_id: check.id, type: check.check_type } });
+    res.json({ success: true, check });
+  } catch (err) {
+    fail(res, err, 'getCustomerKycCheck');
+  }
+};
+
+module.exports = { getCustomerEditData, updateCustomerDetails, uploadCustomerDocuments, getCustomerKycChecks, getCustomerKycCheck };

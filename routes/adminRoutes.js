@@ -42,7 +42,9 @@ const { getContactMessages, toggleContactMessageRead } = require('../controllers
 const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal, adminRejectWithdrawal } = require('../controllers/investmentController');
 const { getLoanCharges, updateLoanCharges } = require('../controllers/chargesController');
 const { getCoupons, addCoupon, editCoupon, removeCoupon } = require('../controllers/couponController');
-const { getCustomerEditData, updateCustomerDetails, uploadCustomerDocuments } = require('../controllers/customerEditController');
+const {
+  getCustomerEditData, updateCustomerDetails, uploadCustomerDocuments, getCustomerKycChecks, getCustomerKycCheck,
+} = require('../controllers/customerEditController');
 const { getArchived, getArchiveCandidates, archive, restore } = require('../controllers/archiveController');
 const upload = require('../middleware/upload');
 const { pool } = require('../config/db');
@@ -150,6 +152,9 @@ router.post('/archive/restore', requireSuperAdmin, restore);
 router.get('/users/:userId/edit-data', requireSuperAdmin, getCustomerEditData);
 router.put('/users/:userId/details', requireSuperAdmin, updateCustomerDetails);
 router.post('/users/:userId/documents', requireSuperAdmin, handleCustomerDocs, uploadCustomerDocuments);
+// Everything the PAN / Aadhaar / bank / IFSC / GST checks returned (super_admin only)
+router.get('/users/:userId/kyc-checks', requireSuperAdmin, getCustomerKycChecks);
+router.get('/users/:userId/kyc-checks/:checkId', requireSuperAdmin, getCustomerKycCheck);
 
 // Coupon codes a customer can use at the withdrawal request (super_admin only)
 router.get('/coupons', requireSuperAdmin, getCoupons);

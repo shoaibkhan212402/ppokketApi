@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const quickekyc = require('./quickekyc');
+const { recordKycCheck } = require('./kycChecks');
 
 // GST number check on the GST portal, through QuickeKYC. Only while
 // KYC_PROVIDER=quickekyc; otherwise a GST number is format-checked only
@@ -72,10 +73,11 @@ const lookupGstin = async (gstin) => {
   // 15 s (old APKs too), and never blocks the save when the service is slow —
   // so 8 s at most (good answers came in 1–2 s).
   const r = await quickekyc.call('/corporate/gstin', { id_number: gstin, filing_status_get: true }, { label: 'GST verification', timeout: 8000 });
-  if (!r.ok) return { found: false, message: r.message, requestId: r.requestId };
+  if (!r.ok) return { found: false, message: r.message, requestId: r.requestId, raw: r.raw };
 
   const d = r.data;
   return {
+    raw: r.raw,
     found: true,
     status: quickekyc.pick(d, 'gstin_status', 'sts', 'status'),
     legalName: quickekyc.pick(d, 'legal_name', 'lgnm'),
@@ -153,9 +155,20 @@ const checkGstinBeforeSave = async (userId, gstin, storedGstin) => {
   } catch (err) {
     // Service down: save without a check rather than block the customer
     console.warn('[gst] GST check skipped for user', userId, '-', err.message);
+    await recordKycCheck({
+      userId, type: 'gst', outcome: 'failed', summary: err.details?.reason || err.message,
+      input: { gstin }, response: err.details?.raw || null, provider: err.details?.provider,
+    });
     return { ok: true };
   }
 
+  await recordKycCheck({
+    userId, type: 'gst', requestId: result.requestId, input: { gstin }, response: result.raw || null,
+    outcome: result.found ? (result.status && !/^active/i.test(result.status) ? 'not_active' : 'verified') : 'not_found',
+    summary: result.found
+      ? `${gstin} → ${result.legalName || result.tradeName || '—'} · ${result.status || 'status unknown'}${result.lastFiling ? ` · last return ${result.lastFiling}` : ''}`
+      : result.message || `${gstin} not found on the GST portal`,
+  });
   await writeRow(userId, gstin, result);
   if (!result.found && isNew) return { ok: false, message: notFoundMessage(gstin) };
   return { ok: true };

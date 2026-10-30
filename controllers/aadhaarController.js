@@ -7,6 +7,7 @@ const {
 } = require('../utils/aadhaarMode');
 const { notArchivedSql } = require('../utils/archive');
 const { auditLog } = require('../utils/audit');
+const { recordKycCheck, maskAadhaar } = require('../utils/kycChecks');
 
 // ─────────────────────────────────────────────────────────────
 // POST /api/aadhaar/save-number
@@ -70,12 +71,22 @@ const sendOTP = async (req, res) => {
       });
     }
 
+    const checkInput = { aadhaar: maskAadhaar(aadhaar_number) };
     let result;
     try {
       result = await aadhaarSendOTP(aadhaar_number);
     } catch (apiErr) {
+      await recordKycCheck({
+        userId, type: 'aadhaar_otp', outcome: 'failed', summary: apiErr.details?.reason || apiErr.message,
+        input: checkInput, response: apiErr.details?.raw || null, provider: apiErr.details?.provider,
+      });
       return res.status(502).json({ success: false, message: apiErr.message });
     }
+    await recordKycCheck({
+      userId, type: 'aadhaar_otp', outcome: result.success ? 'otp_sent' : 'not_sent',
+      summary: result.success ? `OTP sent for ${checkInput.aadhaar || 'Aadhaar'}` : result.message,
+      requestId: result.requestId, input: checkInput, response: result.raw || null,
+    });
 
     if (!result.success) {
       return res.status(400).json({
@@ -134,19 +145,58 @@ const verifyOTP = async (req, res) => {
       });
     }
 
+    const checkInput = { reference_id: String(reference_id) };
     let result;
     try {
       result = await aadhaarVerifyOTP(reference_id, otp);
     } catch (apiErr) {
+      await recordKycCheck({
+        userId, type: 'aadhaar', outcome: 'failed', summary: apiErr.details?.reason || apiErr.message,
+        input: checkInput, response: apiErr.details?.raw || null, provider: apiErr.details?.provider,
+      });
       return res.status(502).json({ success: false, message: apiErr.message });
     }
 
     if (!result.success || !result.verified) {
+      await recordKycCheck({
+        userId, type: 'aadhaar', outcome: 'not_verified', summary: result.message,
+        requestId: result.requestId, input: checkInput, response: result.raw || null,
+      });
       return res.status(400).json({
         success: false,
         verified: false,
         message: result.message || 'Aadhaar OTP verification failed.',
         errorCode: result.errorCode,
+      });
+    }
+
+    // ── Date of birth must match the profile ───────────────────
+    // Aadhaar gives the real date of birth. A different one in the profile is
+    // either a typing mistake or someone else's details: the customer has to
+    // correct it in their profile and verify Aadhaar again (a new OTP).
+    // Nothing is marked verified or saved to aadhaar_kyc in that case; the
+    // answer itself is kept in kyc_checks for the super admin.
+    const [[profile]] = await pool.query("SELECT DATE_FORMAT(date_of_birth, '%Y-%m-%d') AS dob FROM users WHERE id = ?", [userId]);
+    const aadhaarYmd = /^\d{2}-\d{2}-\d{4}$/.test(result.dob || '') ? result.dob.split('-').reverse().join('-') : null;
+    const dobMismatch = profile?.dob && (
+      aadhaarYmd ? aadhaarYmd !== profile.dob
+        // some Aadhaar cards carry only the year of birth
+        : /^\d{4}$/.test(String(result.yob || '')) && String(result.yob) !== profile.dob.slice(0, 4)
+    );
+    const show = (ymd) => ymd.split('-').reverse().join('-'); // YYYY-MM-DD → DD-MM-YYYY
+    await recordKycCheck({
+      userId, type: 'aadhaar', requestId: result.requestId, input: checkInput, response: result.raw || null,
+      outcome: dobMismatch ? 'dob_mismatch' : 'verified',
+      summary: `${result.name || ''} · DOB ${result.dob || result.yob || '—'}${dobMismatch ? ` (profile: ${show(profile.dob)})` : ''}${result.gender ? ` · ${result.gender}` : ''}`,
+    });
+    if (dobMismatch) {
+      const aadhaarShows = result.dob || `the year ${result.yob}`;
+      return res.status(400).json({
+        success: false,
+        verified: false,
+        dob_mismatch: true,
+        aadhaar_dob: result.dob || result.yob,
+        message: `Your date of birth does not match your Aadhaar. Aadhaar shows ${aadhaarShows}, but your profile has ${show(profile.dob)}. Please update your date of birth in your profile, then verify Aadhaar again.`,
       });
     }
 

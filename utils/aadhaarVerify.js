@@ -380,8 +380,12 @@ const verifyOtpQuickeKyc = async (referenceId, otp) => {
     || (fromParts ? fromParts + (address.pc ? ` - ${address.pc}` : '') : null);
 
   // The controller stores the date with STR_TO_DATE(?, '%d-%m-%Y')
-  const ymd = quickekyc.toYmd(quickekyc.pick(d, 'dob', 'date_of_birth'));
+  const rawDob = quickekyc.pick(d, 'dob', 'date_of_birth');
+  const ymd = quickekyc.toYmd(rawDob);
   const dob = ymd ? ymd.split('-').reverse().join('-') : null;
+  // Some Aadhaar cards have only the year of birth
+  const yearOnly = String(rawDob || quickekyc.pick(d, 'yob', 'year_of_birth') || '').trim();
+  const yob = !ymd && /^\d{4}$/.test(yearOnly) ? yearOnly : null;
 
   // Plain base64 JPEG, like APItxt sent (without a "data:image/...;base64," prefix)
   const image = quickekyc.pick(d, 'profile_image', 'photo', 'image');
@@ -392,6 +396,7 @@ const verifyOtpQuickeKyc = async (referenceId, otp) => {
     verified:    true,
     name,
     dob,
+    yob,
     gender:      quickekyc.pick(d, 'gender'),
     careOf:      quickekyc.pick(d, 'care_of', 'careof'),
     fullAddress,

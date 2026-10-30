@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
 const { verifyPAN } = require('../utils/panVerify');
+const { recordKycCheck } = require('../utils/kycChecks');
 const { recordSelfieCheck } = require('../utils/selfieCheck');
 const { aadhaarOtpOnOrDefault, isWithoutOtp } = require('../utils/aadhaarMode');
 
@@ -338,7 +339,29 @@ const panVerifyEndpoint = async (req, res) => {
       });
     }
 
-    const result = await verifyPAN({ pan, name, dob });
+    // Every attempt is kept with the provider's full answer for the super admin
+    const checkInput = { pan: panUpper, name, dob };
+    let result;
+    try {
+      result = await verifyPAN({ pan, name, dob });
+    } catch (err) {
+      await recordKycCheck({
+        userId, type: 'pan', outcome: 'failed', summary: err.details?.reason || err.message,
+        input: checkInput, response: err.details?.raw || null, provider: err.details?.provider,
+      });
+      throw err;
+    }
+    await recordKycCheck({
+      userId, type: 'pan', requestId: result.requestId, input: checkInput, response: result.raw || null,
+      outcome: !result.success || !result.verified ? 'not_verified'
+        : result.panStatus && result.panStatus !== 'valid' ? 'not_active'
+        : result.name_match !== true ? 'name_mismatch'
+        : result.dob_match !== true && !result.dobUnchecked ? 'dob_mismatch'
+        : 'verified',
+      summary: result.fullName
+        ? `${result.panNumber} → ${result.fullName}${result.category ? ` (${result.category})` : ''}${result.dobUnchecked ? ' · DOB not checked' : ''}`
+        : result.message || null,
+    });
 
     // Step 1 — PAN must exist and be verified by the authority
     if (!result.success || !result.verified) {

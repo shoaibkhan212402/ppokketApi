@@ -7,6 +7,7 @@ const { loadChargeContext, chargesAsOf, plainCharges, attachLoanCharges, attachE
 const { defaultFirstEmiDate } = require('../utils/loanUtils');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
 const { checkGstinBeforeSave } = require('../utils/gstVerify');
+const { recordKycCheck } = require('../utils/kycChecks');
 const { companyNames } = require('../utils/companies');
 const { cleanReferences, getReferences, saveReferences, isReferencesUnavailable } = require('../utils/references');
 const { sendReferenceOtp, verifyReferenceOtp, firstUnverifiedReference } = require('../utils/referenceOtp');
@@ -377,6 +378,8 @@ const verifyBankDetails = async (req, res) => {
     const [userRow] = await pool.query('SELECT mobile FROM users WHERE id = ?', [userId]);
     const mobile = userRow[0]?.mobile || '';
 
+    // Every attempt is kept with the provider's full answer for the super admin
+    const bankInput = { account_holder: account_holder.trim(), account_number: cleanAcc, ifsc: cleanIfsc };
     let verifyRes;
     try {
       verifyRes = await verifyBankAccount({
@@ -384,7 +387,22 @@ const verifyBankDetails = async (req, res) => {
         name: account_holder.trim(), mobile, useCache: false,
       });
     } catch (err) {
+      await recordKycCheck({
+        userId, type: 'bank', outcome: 'failed', summary: err.details?.reason || err.message,
+        input: bankInput, response: err.details?.raw || null, provider: err.details?.provider,
+      });
       return res.status(502).json({ success: false, message: `Bank verification service error: ${err.message}` });
+    }
+    {
+      const found = verifyRes.success && verifyRes.accountExists;
+      const nameOk = found && verifyRes.nameAtBank && compareName(verifyRes.nameAtBank, account_holder.trim()).match;
+      await recordKycCheck({
+        userId, type: 'bank', requestId: verifyRes.requestId, input: bankInput, response: verifyRes.raw || null,
+        outcome: !found ? 'not_found' : !verifyRes.nameAtBank ? 'no_name' : !nameOk ? 'name_mismatch' : 'verified',
+        summary: found
+          ? `…${cleanAcc.slice(-4)} @ ${cleanIfsc} → ${verifyRes.nameAtBank || 'no name returned'}${verifyRes.utr ? ` · UTR ${verifyRes.utr}` : ''}`
+          : verifyRes.message || `Account …${cleanAcc.slice(-4)} not found at ${cleanIfsc}`,
+      });
     }
 
     // ── Step 3: Account must be found at this IFSC ───────────────────────────
@@ -434,6 +452,11 @@ const verifyBankDetails = async (req, res) => {
     let ifscData = null;
     try {
       const ifscRes = await verifyIFSC(cleanIfsc);
+      await recordKycCheck({
+        userId, type: 'ifsc', requestId: ifscRes.requestId, input: { ifsc: cleanIfsc }, response: ifscRes.raw || null,
+        outcome: ifscRes.success ? 'verified' : 'not_found',
+        summary: ifscRes.success ? `${cleanIfsc} → ${[ifscRes.bank, ifscRes.branch, ifscRes.city].filter(Boolean).join(', ')}` : ifscRes.message,
+      });
       if (!ifscRes.success) {
         return res.status(400).json({
           success: false, field: 'ifsc',
@@ -442,6 +465,7 @@ const verifyBankDetails = async (req, res) => {
       }
       ifscData = ifscRes;
     } catch (ifscErr) {
+      await recordKycCheck({ userId, type: 'ifsc', outcome: 'failed', summary: ifscErr.message, input: { ifsc: cleanIfsc }, provider: 'apitxt' });
       return res.status(502).json({ success: false, message: `IFSC verification service error: ${ifscErr.message}` });
     }
 

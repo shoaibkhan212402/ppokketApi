@@ -52,14 +52,19 @@ const NOT_ALLOWED_RETRY_MS = 60 * 60 * 1000;
  * answered about the input (ok = true only for status 'success').
  * Throws an Error whose message is safe to show a customer when the service
  * could not answer (network, timeout, bad key, empty wallet, their outage);
- * `error.notAllowed` is set when the service is not enabled on the account.
+ * `error.notAllowed` is set when the service is not enabled on the account,
+ * and `error.details` = { provider, path, statusCode, reason, raw } says what
+ * went wrong (kept with the check for the super admin — utils/kycChecks.js).
  */
 const call = async (path, body, { label = 'Verification', timeout = 30000 } = {}) => {
-  const unavailable = () => new Error(`${label} service is temporarily unavailable. Please try again in a few minutes.`);
-  const notAllowed = () => Object.assign(unavailable(), { notAllowed: true });
+  const unavailable = (details = {}) => Object.assign(
+    new Error(`${label} service is temporarily unavailable. Please try again in a few minutes.`),
+    { details: { provider: 'quickekyc', path, ...details } }
+  );
+  const notAllowed = (details) => Object.assign(unavailable({ reason: 'Service not allowed', ...details }), { notAllowed: true });
 
   const refusedAt = notAllowedSince.get(path);
-  if (refusedAt && Date.now() - refusedAt < NOT_ALLOWED_RETRY_MS) throw notAllowed();
+  if (refusedAt && Date.now() - refusedAt < NOT_ALLOWED_RETRY_MS) throw notAllowed({ reason: 'Service not allowed (remembered)' });
 
   let res;
   try {
@@ -70,14 +75,14 @@ const call = async (path, body, { label = 'Verification', timeout = 30000 } = {}
     });
   } catch (err) {
     console.error(`[QuickeKYC] ${path} request failed:`, err.code || err.message);
-    throw unavailable();
+    throw unavailable({ reason: `No answer: ${err.code || err.message}` });
   }
 
   const raw = res.data;
   if (!raw || typeof raw !== 'object' || !('status' in raw)) {
     // Not a QuickeKYC answer at all (an HTML 404 page = wrong base URL or path)
     console.error(`[QuickeKYC] ${path} unexpected reply, HTTP ${res.status}`);
-    throw unavailable();
+    throw unavailable({ statusCode: res.status, reason: `Unexpected reply (HTTP ${res.status})` });
   }
 
   const statusCode = Number(raw.status_code) || res.status;
@@ -87,11 +92,11 @@ const call = async (path, body, { label = 'Verification', timeout = 30000 } = {}
   if (!ok && /service not allowed/i.test(String(raw.message || ''))) {
     notAllowedSince.set(path, Date.now());
     console.error(`[QuickeKYC] ${path} is not enabled on this QuickeKYC account ("${raw.message}") — ask QuickeKYC to enable it.`);
-    throw notAllowed();
+    throw notAllowed({ statusCode, raw });
   }
   if (!ok) {
     console.warn(`[QuickeKYC] ${path} answered ${statusCode}:`, raw.message || '(no message)', requestId || '');
-    if (isServiceProblem(statusCode)) throw unavailable();
+    if (isServiceProblem(statusCode)) throw unavailable({ statusCode, reason: raw.message || `Error ${statusCode}`, raw });
   }
   if (ok) notAllowedSince.delete(path);
 
