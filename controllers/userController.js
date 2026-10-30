@@ -685,13 +685,18 @@ const sendReferenceOtpHandler = async (req, res) => {
     const me = await referenceOtpUser(req.user.id);
     if (!me) return res.status(404).json({ success: false, message: 'User not found' });
     const result = await sendReferenceOtp(me, req.body?.mobile);
-    if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+    if (!result.ok) {
+      return res.status(result.status).json({ success: false, message: result.message, retry_after: result.retry_after });
+    }
     res.json({
       success: true,
       already_verified: !!result.already_verified,
+      // Seconds until Resend works, and how many more sends this hour
+      resend_in: result.resend_in,
+      sends_left: result.sends_left,
       message: result.already_verified
         ? 'This number is already verified.'
-        : `OTP sent to +91 ${result.mobile}. Ask them for the code.`,
+        : `OTP sent to +91 ${result.mobile}.`,
     });
   } catch (err) {
     console.error('[sendReferenceOtp]', err.message);

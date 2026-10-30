@@ -173,15 +173,17 @@ const BLOCKED_PAN_STATUS = /invalid|deactivat|delet|fake|surrender|cancel/i;
  */
 // PAN Advance may also give the date of birth; the basic PAN check gives the
 // name only (pan_number, full_name, category — seen 2026-10-28). Advance is
-// tried first; while QuickeKYC says it is not enabled on the account
-// (quickekyc.js remembers that for an hour) the basic check is used.
+// tried first and the basic check whenever Advance cannot answer: not enabled
+// on the account (remembered for an hour in quickekyc.js), wallet too low for
+// it ("Insuffient balance", 402 — seen 2026-10-30 with the old key), their
+// outage or a slow answer. Only when the basic check fails too does the
+// customer see "temporarily unavailable".
 const lookupPan = async (panClean) => {
-  const opts = { label: 'PAN verification', timeout: 20000 };
   try {
-    return await quickekyc.call('/pan/pan_advance', { id_number: panClean }, opts);
+    return await quickekyc.call('/pan/pan_advance', { id_number: panClean }, { label: 'PAN verification', timeout: 10000 });
   } catch (err) {
-    if (!err.notAllowed) throw err;
-    return quickekyc.call('/pan/pan', { id_number: panClean }, opts);
+    if (!err.notAllowed) console.warn('[PAN Verify] PAN Advance could not answer — using the basic PAN check:', err.message);
+    return quickekyc.call('/pan/pan', { id_number: panClean }, { label: 'PAN verification', timeout: 20000 });
   }
 };
 

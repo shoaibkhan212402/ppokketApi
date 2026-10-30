@@ -86,8 +86,13 @@ const checkMobile = (value, ownMobile) => {
   return { mobile };
 };
 
+// "in 42 minutes" / "in 30 seconds"
+const waitText = (seconds) => (seconds >= 60 ? `in ${Math.ceil(seconds / 60)} minutes` : `in ${seconds} seconds`);
+
 // Sends the OTP to a reference's number.
-// Resolves to { ok: true, already_verified? } or { ok: false, status, message }.
+// Resolves to { ok: true, mobile, resend_in, sends_left } / { ok: true, already_verified }
+// or { ok: false, status, message, retry_after? } — retry_after (seconds) tells
+// the screen how long to count down before Resend works again.
 const sendReferenceOtp = async (user, value) => {
   const { mobile, error } = checkMobile(value, user.mobile);
   if (error) return { ok: false, status: 400, message: error };
@@ -95,16 +100,30 @@ const sendReferenceOtp = async (user, value) => {
   if ((await verifiedMobiles(user.id)).has(mobile)) return { ok: true, already_verified: true, mobile };
 
   const cooldown = await redisClient.ttl(`refotp_cooldown:${mobile}`);
-  if (cooldown > 0) return { ok: false, status: 429, message: `Please wait ${cooldown}s before sending another OTP to this number.` };
-
-  // Caps, so nobody can use this to flood someone's phone with SMS
-  const perNumber = await redisClient.incr(`refotp_sendcount:${mobile}`);
-  if (perNumber === 1) await redisClient.expire(`refotp_sendcount:${mobile}`, WINDOW_SECONDS);
-  const perCustomer = await redisClient.incr(`refotp_user:${user.id}`);
-  if (perCustomer === 1) await redisClient.expire(`refotp_user:${user.id}`, WINDOW_SECONDS);
-  if (perNumber > MAX_SENDS_PER_NUMBER || perCustomer > MAX_SENDS_PER_CUSTOMER) {
-    return { ok: false, status: 429, message: 'Too many OTPs sent. Please try again in an hour.' };
+  if (cooldown > 0) {
+    return { ok: false, status: 429, retry_after: cooldown, message: `Please wait ${cooldown}s before sending another OTP to this number.` };
   }
+
+  // Caps, so nobody can use this to flood someone's phone with SMS. Checked
+  // before counting, so a refused try does not use up the allowance.
+  const numberKey = `refotp_sendcount:${mobile}`;
+  const customerKey = `refotp_user:${user.id}`;
+  const sentToNumber = Number(await redisClient.get(numberKey)) || 0;
+  const sentByCustomer = Number(await redisClient.get(customerKey)) || 0;
+  if (sentToNumber >= MAX_SENDS_PER_NUMBER || sentByCustomer >= MAX_SENDS_PER_CUSTOMER) {
+    const ttl = await redisClient.ttl(sentToNumber >= MAX_SENDS_PER_NUMBER ? numberKey : customerKey);
+    const retryAfter = ttl > 0 ? ttl : WINDOW_SECONDS;
+    return {
+      ok: false, status: 429, retry_after: retryAfter,
+      message: sentToNumber >= MAX_SENDS_PER_NUMBER
+        ? `Too many OTPs sent to this number. Please try again ${waitText(retryAfter)}.`
+        : `Too many OTPs sent. Please try again ${waitText(retryAfter)}.`,
+    };
+  }
+  const perNumber = await redisClient.incr(numberKey);
+  if (perNumber === 1) await redisClient.expire(numberKey, WINDOW_SECONDS);
+  const perCustomer = await redisClient.incr(customerKey);
+  if (perCustomer === 1) await redisClient.expire(customerKey, WINDOW_SECONDS);
 
   // The store-review test account gets the fixed test code and no SMS
   const testAccount = isDevTestNumber(user.mobile);
@@ -112,7 +131,11 @@ const sendReferenceOtp = async (user, value) => {
   await redisClient.setEx(otpKey(user.id, mobile), OTP_TTL_SECONDS, JSON.stringify({ otp, attempts: 0 }));
   if (!testAccount) await sendOtpViaSms(mobile, otp, referenceTemplate(otp, user.full_name));
   await redisClient.setEx(`refotp_cooldown:${mobile}`, RESEND_COOLDOWN_SECONDS, '1');
-  return { ok: true, mobile };
+  return {
+    ok: true, mobile,
+    resend_in: RESEND_COOLDOWN_SECONDS,
+    sends_left: Math.max(0, Math.min(MAX_SENDS_PER_NUMBER - perNumber, MAX_SENDS_PER_CUSTOMER - perCustomer)),
+  };
 };
 
 // Checks the code the customer typed.
