@@ -14,18 +14,23 @@ const { cleanMobile } = require('./references');
 // numbers saved before this check existed are kept, and the admin sees them as
 // "not verified".
 //
-// The SMS uses the login OTP's Orbitel template ("Your PPokket verification
-// code is …") until a message of its own is approved on DLT. Then set, on the
-// server: ORBITEL_REFERENCE_TEMPLATE_ID and ORBITEL_REFERENCE_SMS — the
-// approved text exactly, with {otp} where the code goes and, if the template
-// has it, {name} for the customer's name. Both must be set to take effect.
+// The SMS has its own DLT template, set on the server with
+// ORBITEL_REFERENCE_TEMPLATE_ID and ORBITEL_REFERENCE_SMS — the approved text
+// exactly, with {otp} where the code goes and, if the template has it, {name}
+// for the customer's name. Both must be set, otherwise the login OTP's
+// template ("Your PPokket verification code is …") is used.
+// Characters that cannot be seen are written as \uXXXX in the setting: the
+// approved template (1777179316850931104) has a zero-width space (​)
+// before each variable, and DLT delivers the SMS only when it has them too.
+const unescape = (s) => s.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
 const referenceTemplate = (otp, customerName) => {
   const templateId = process.env.ORBITEL_REFERENCE_TEMPLATE_ID;
   const text = process.env.ORBITEL_REFERENCE_SMS;
   if (!templateId || !text) return null; // login template
   return {
     templateId,
-    text: text.replace(/\{otp\}/g, otp).replace(/\{name\}/g, String(customerName || 'A customer').slice(0, 30)),
+    text: unescape(text).replace(/\{otp\}/g, otp).replace(/\{name\}/g, String(customerName || 'A customer').slice(0, 30)),
   };
 };
 

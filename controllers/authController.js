@@ -52,7 +52,28 @@ const sendOtpViaSms = async (mobile, otp, template = null) => {
     throw new Error('Orbitel SMS gateway not properly configured in environment variables');
   }
 
-  const text = template?.text || `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
+  // Other templates go through Orbitel's newer API, which can send Unicode:
+  // the reference template was registered on DLT with invisible zero-width
+  // spaces before its variables, and only a message that carries them too
+  // (sent as Unicode) is delivered — tested 2026-10-30. The login SMS keeps
+  // the older API below, unchanged.
+  if (template) {
+    const url = new URL('https://bulksms.orbitel.in/fe/api/v1/send');
+    url.searchParams.set('username', user);
+    url.searchParams.set('apiKey', authkey);
+    url.searchParams.set('from', sender);
+    url.searchParams.set('to', mobile);
+    url.searchParams.set('text', template.text);
+    if (/[^\x20-\x7E]/.test(template.text)) url.searchParams.set('unicode', 'true');
+    url.searchParams.set('templateid', templateid);
+
+    const resp = await fetch(url.toString());
+    const data = await resp.text();
+    console.log('[Orbitel SMS Response]:', data);
+    return data;
+  }
+
+  const text = `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
 
   const url = new URL('https://bulksms.orbitel.in/api/pushsms');
   url.searchParams.set('user', user);
