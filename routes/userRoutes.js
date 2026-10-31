@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const {
   getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard,
-  getNotifications, markNotificationsRead, sendReferenceOtpHandler, verifyReferenceOtpHandler,
+  getNotifications, markNotificationsRead, sendReferenceOtpHandler, verifyReferenceOtpHandler, gstLookupHandler,
 } = require('../controllers/userController');
 const { protect } = require('../middleware/auth');
 // A customer in the Admin → Archive who carries on leaves it (utils/archive.js)
@@ -32,6 +32,8 @@ router.post('/references/verify-otp', protect, verifyReferenceOtpHandler);
 router.post('/offer-letter', protect, handleOfferLetterUpload, uploadOfferLetter);
 // Suggestions for the "Company Name" box — open, so the sign-up form can use it too
 router.get('/companies', getCompanies);
+// GST lookup — open (auth optional) so the profile form can call it before the user has saved
+router.get('/gst-lookup', gstLookupHandler);
 router.put('/bank-details', protect, updateBankDetails);
 router.post('/bank-verify', protect, backFromArchive('Bank account verified'), verifyBankDetails);
 router.get('/dashboard', protect, getDashboard);

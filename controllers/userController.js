@@ -743,8 +743,45 @@ const verifyReferenceOtpHandler = async (req, res) => {
   }
 };
 
+// GET /api/user/gst-lookup?gstin=XXXXXXXXXXX
+// Public lookup for app/website: returns verified business details for a GSTIN.
+// Uses the same QuickeKYC util as the profile save, so results are cached.
+const gstLookupHandler = async (req, res) => {
+  const { lookupGstin } = require('../utils/gstVerify');
+  const { isValidGstin, normalizeGstin } = require('../utils/gst');
+  const raw = (req.query.gstin || '').trim().toUpperCase();
+  const gstin = normalizeGstin(raw) || raw;
+  if (!gstin || !isValidGstin(gstin)) {
+    return res.status(400).json({ success: false, message: 'Invalid GSTIN format.' });
+  }
+  try {
+    const result = await lookupGstin(gstin);
+    if (!result.found) return res.status(404).json({ success: false, message: result.message || 'GSTIN not found on the GST portal.' });
+    return res.json({
+      success: true,
+      data: {
+        gstin,
+        status: result.status,
+        legalName: result.legalName,
+        tradeName: result.tradeName,
+        registeredOn: result.registeredOn,
+        constitution: result.constitution,
+        taxpayerType: result.taxpayerType,
+        address: result.address,
+        lastFiling: result.lastFiling,
+      },
+    });
+  } catch (err) {
+    console.error('[gst-lookup]', err.message);
+    return res.status(503).json({ success: false, message: 'GST lookup service unavailable. Please try again.' });
+  }
+};
+
 module.exports = {
   getProfile, updateProfile, uploadOfferLetter, getCompanies, updateBankDetails, verifyBankDetails, getDashboard,
   getNotifications, markNotificationsRead, getUserCreditDetails, sendReferenceOtpHandler, verifyReferenceOtpHandler,
+  gstLookupHandler,
 };
+
+
 
