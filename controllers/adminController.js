@@ -1964,6 +1964,37 @@ const setLoanSettlement = async (req, res) => {
   }
 };
 
+// GET /api/admin/users/:userId/kyc-checks  (super admin only)
+// Lists all verification checks for a customer (PAN, Aadhaar, bank, IFSC, GST)
+const getCustomerKycChecks = async (req, res) => {
+  const { listKycChecks } = require('../utils/kycChecks');
+  try {
+    const checks = await listKycChecks(req.params.userId);
+    res.json({ success: true, checks });
+  } catch (err) {
+    console.error('[getCustomerKycChecks]', err.message);
+    res.status(500).json({ success: false, message: 'Could not load verification checks.' });
+  }
+};
+
+// GET /api/admin/users/:userId/kyc-checks/:checkId  (super admin only)
+// Full detail of one check including the provider's raw response
+const getCustomerKycCheck = async (req, res) => {
+  const { getKycCheck } = require('../utils/kycChecks');
+  try {
+    const check = await getKycCheck(req.params.checkId);
+    if (!check) return res.status(404).json({ success: false, message: 'Check not found.' });
+    // Safety: ensure this check belongs to the requested user
+    if (String(check.user_id) !== String(req.params.userId)) {
+      return res.status(403).json({ success: false, message: 'Check does not belong to this user.' });
+    }
+    res.json({ success: true, check });
+  } catch (err) {
+    console.error('[getCustomerKycCheck]', err.message);
+    res.status(500).json({ success: false, message: 'Could not load this check.' });
+  }
+};
+
 module.exports = {
   getAdminDashboard, getAllUsers, getAllLoans,
   setLoanSettlement,
@@ -1985,6 +2016,8 @@ module.exports = {
   getDsaBankPartners, assignUserPartner,
   // Lead management (DSA partner CRM)
   updateLeadStatus, getLeadKycDetails,
+  // KYC verification data (super admin)
+  getCustomerKycChecks, getCustomerKycCheck,
   // Audit
   getAuditLog,
 };
