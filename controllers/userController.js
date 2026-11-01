@@ -8,6 +8,7 @@ const { defaultFirstEmiDate } = require('../utils/loanUtils');
 const { cleanEmployment, getEmployment, saveEmployment, saveOfferLetter, isEmploymentUnavailable } = require('../utils/employment');
 const { checkGstinBeforeSave } = require('../utils/gstVerify');
 const { recordKycCheck } = require('../utils/kycChecks');
+const { customerKycStatus, kycStatusOf } = require('../utils/kycProgress');
 const { companyNames } = require('../utils/companies');
 const { cleanReferences, getReferences, saveReferences, isReferencesUnavailable } = require('../utils/references');
 const { sendReferenceOtp, verifyReferenceOtp, firstUnverifiedReference } = require('../utils/referenceOtp');
@@ -64,7 +65,9 @@ const getProfile = async (req, res) => {
       `SELECT u.*, bd.account_holder, bd.account_number, bd.ifsc_code, bd.bank_name, bd.account_type, bd.is_verified as bank_verified,
               bd.ifsc_bank_name, bd.branch, bd.branch_address, bd.city, bd.state,
               bd.micr, bd.swift, bd.contact, bd.neft, bd.rtgs, bd.imps, bd.upi, bd.ifsc_verified,
-              k.status as kyc_doc_status
+              k.status as kyc_doc_status, k.pan_verified AS kyc_doc_pan, k.aadhaar_verified AS kyc_doc_aadhaar,
+              k.aadhaar_front AS kyc_doc_aadhaar_front, k.aadhaar_back AS kyc_doc_aadhaar_back,
+              k.selfie AS kyc_doc_selfie, k.bank_passbook AS kyc_doc_bank_passbook
        FROM users u
        LEFT JOIN bank_details bd ON bd.user_id = u.id
        LEFT JOIN kyc_documents k ON k.user_id = u.id
@@ -74,14 +77,24 @@ const getProfile = async (req, res) => {
     if (!rows.length) return res.status(404).json({ success: false, message: 'User not found' });
     const user = rows[0];
     delete user.password;
-    if (user.is_kyc_verified) {
-      user.kyc_status = 'approved';
-    } else if (user.kyc_doc_status) {
-      user.kyc_status = user.kyc_doc_status;
-    } else {
-      user.kyc_status = 'not_submitted';
+    // A KYC left half done is 'pending' in kyc_documents too — the customer
+    // is told to complete it, not that it is under review (utils/kycProgress.js)
+    user.kyc_status = customerKycStatus({
+      isKycVerified: !!user.is_kyc_verified,
+      doc: user.kyc_doc_status ? {
+        status: user.kyc_doc_status,
+        aadhaar_front: user.kyc_doc_aadhaar_front,
+        aadhaar_back: user.kyc_doc_aadhaar_back,
+        selfie: user.kyc_doc_selfie,
+        bank_passbook: user.kyc_doc_bank_passbook,
+      } : null,
+      panVerified: !!(user.pan_verified || user.kyc_doc_pan),
+      aadhaarVerified: !!(user.aadhaar_verified || user.kyc_doc_aadhaar),
+      bankVerified: !!user.bank_verified,
+    });
+    for (const key of ['kyc_doc_status', 'kyc_doc_pan', 'kyc_doc_aadhaar', 'kyc_doc_aadhaar_front', 'kyc_doc_aadhaar_back', 'kyc_doc_selfie', 'kyc_doc_bank_passbook']) {
+      delete user[key];
     }
-    delete user.kyc_doc_status;
 
     // Load global system settings for fallbacks
     const [settingsRows] = await pool.query('SELECT setting_key, setting_value FROM system_settings');
@@ -566,12 +579,8 @@ const getDashboard = async (req, res) => {
     const [userRows] = await pool.query(
       'SELECT credit_limit, withdrawal_limit, wallet_balance, credit_score, experian_score, is_kyc_verified FROM users WHERE id = ?', [userId]
     );
-    const [kycRows] = await pool.query(
-      'SELECT status FROM kyc_documents WHERE user_id = ?', [userId]
-    );
-    const kyc_status = userRows[0]?.is_kyc_verified
-      ? 'approved'
-      : (kycRows[0]?.status || 'not_submitted');
+    // A KYC left half done reads 'not_submitted' here (utils/kycProgress.js)
+    const kyc_status = await kycStatusOf(userId);
     const [activeLoan] = await pool.query(
       'SELECT *, UNIX_TIMESTAMP(approved_at) AS approved_ts FROM loans WHERE user_id = ? AND status IN ("disbursed","approved","withdrawal_requested") ORDER BY created_at DESC LIMIT 1', [userId]
     );
@@ -743,19 +752,21 @@ const verifyReferenceOtpHandler = async (req, res) => {
   }
 };
 
-// GET /api/user/gst-lookup?gstin=XXXXXXXXXXX
-// Public lookup for app/website: returns verified business details for a GSTIN.
-// Uses the same QuickeKYC util as the profile save, so results are cached.
+// GET /api/user/gst-lookup?gstin=XXXXXXXXXXX  (logged-in customers only)
+// Business details of a GSTIN for the profile form (app and website). Every
+// new number is a paid QuickeKYC check, so the route needs a login and has a
+// per-customer limit; the customer's saved answer for the same number is
+// reused (utils/gstVerify.js).
 const gstLookupHandler = async (req, res) => {
-  const { lookupGstin } = require('../utils/gstVerify');
+  const { lookupGstinForUser } = require('../utils/gstVerify');
   const { isValidGstin, normalizeGstin } = require('../utils/gst');
-  const raw = (req.query.gstin || '').trim().toUpperCase();
-  const gstin = normalizeGstin(raw) || raw;
+  const gstin = normalizeGstin(req.query.gstin);
   if (!gstin || !isValidGstin(gstin)) {
     return res.status(400).json({ success: false, message: 'Invalid GSTIN format.' });
   }
   try {
-    const result = await lookupGstin(gstin);
+    const result = await lookupGstinForUser(req.user.id, gstin);
+    if (result.off) return res.status(404).json({ success: false, message: 'GST check is not available right now.' });
     if (!result.found) return res.status(404).json({ success: false, message: result.message || 'GSTIN not found on the GST portal.' });
     return res.json({
       success: true,

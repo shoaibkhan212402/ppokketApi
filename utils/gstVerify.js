@@ -174,6 +174,56 @@ const checkGstinBeforeSave = async (userId, gstin, storedGstin) => {
   return { ok: true };
 };
 
+// The customer's profile form looks a GSTIN up as soon as all 15 characters
+// are typed, to show the registered business and fill the company name.
+// The customer's saved answer for the same number is reused (so opening the
+// form again, and the save after the lookup, cost nothing); a new answer is
+// logged like the save's own check and kept for the save. A saved answer for
+// a different number is left alone: it may be the number on the profile,
+// which the admin sees. Resolves to { off: true } when the GST check is not
+// switched on, otherwise like lookupGstin(). Throws when the service is down.
+const lookupGstinForUser = async (userId, gstin) => {
+  if (!quickekyc.isQuickeKycOn()) return { off: true, found: false };
+
+  const known = await readRow(userId);
+  if (known && known.gstin === gstin) {
+    const fresh = known.found || Date.now() - new Date(known.checked_at).getTime() < NOT_FOUND_RECHECK_MS;
+    if (fresh) {
+      return {
+        found: !!known.found,
+        status: known.gst_status,
+        legalName: known.legal_name,
+        tradeName: known.trade_name,
+        registeredOn: known.registered_on,
+        constitution: known.constitution,
+        taxpayerType: known.taxpayer_type,
+        address: known.address,
+        lastFiling: known.last_filing,
+      };
+    }
+  }
+
+  let result;
+  try {
+    result = await lookupGstin(gstin);
+  } catch (err) {
+    await recordKycCheck({
+      userId, type: 'gst', outcome: 'failed', summary: err.details?.reason || err.message,
+      input: { gstin }, response: err.details?.raw || null, provider: err.details?.provider,
+    });
+    throw err;
+  }
+  await recordKycCheck({
+    userId, type: 'gst', requestId: result.requestId, input: { gstin }, response: result.raw || null,
+    outcome: result.found ? (result.status && !/^active/i.test(result.status) ? 'not_active' : 'verified') : 'not_found',
+    summary: result.found
+      ? `${gstin} → ${result.legalName || result.tradeName || '—'} · ${result.status || 'status unknown'}${result.lastFiling ? ` · last return ${result.lastFiling}` : ''}`
+      : result.message || `${gstin} not found on the GST portal`,
+  });
+  if (!known || known.gstin === gstin) await writeRow(userId, gstin, result);
+  return result;
+};
+
 // Saved checks of several users → Map(userId → row). Never throws.
 const gstChecksOf = async (userIds) => {
   if (!userIds.length) return new Map();
@@ -202,4 +252,4 @@ const gstCheckView = (row, gstNumber) => {
   };
 };
 
-module.exports = { CREATE_TABLE_SQL, checkGstinBeforeSave, gstChecksOf, gstCheckView, lookupGstin, lastFiling };
+module.exports = { CREATE_TABLE_SQL, checkGstinBeforeSave, gstChecksOf, gstCheckView, lookupGstin, lookupGstinForUser, lastFiling };

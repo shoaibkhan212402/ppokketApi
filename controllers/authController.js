@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { pool } = require('../config/db');
 const { redisClient } = require('../config/redis');
+const { kycStatusOf } = require('../utils/kycProgress');
 
 // OTP config
 const OTP_TTL_SECONDS    = 5 * 60;  // 5 minutes
@@ -283,9 +284,9 @@ const handleVerifyAndLogin = async (mobile, otp, res, referralCode = null) => {
     await pool.query('UPDATE users SET updated_at = NOW() WHERE id = ?', [user.id]);
   }
 
-  // Get KYC status
-  const [kycRows] = await pool.query('SELECT status FROM kyc_documents WHERE user_id = ?', [user.id]);
-  const kycStatus = kycRows[0]?.status || 'not_submitted';
+  // KYC status as the customer is shown it: a KYC left half done reads
+  // 'not_submitted' ("Complete your KYC"), not 'pending' (utils/kycProgress.js)
+  const kycStatus = await kycStatusOf(user.id);
 
   const token = generateToken(user.id, 'user');
 

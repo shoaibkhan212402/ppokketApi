@@ -8,6 +8,7 @@ const { protect } = require('../middleware/auth');
 // A customer in the Admin → Archive who carries on leaves it (utils/archive.js)
 const { backFromArchive } = require('../utils/archive');
 const upload = require('../middleware/upload');
+const rateLimit = require('express-rate-limit');
 
 // One file, field name "offer_letter"; multer's own errors (too large, wrong
 // type) are turned into a plain 400 instead of an unhandled error page.
@@ -32,8 +33,17 @@ router.post('/references/verify-otp', protect, verifyReferenceOtpHandler);
 router.post('/offer-letter', protect, handleOfferLetterUpload, uploadOfferLetter);
 // Suggestions for the "Company Name" box — open, so the sign-up form can use it too
 router.get('/companies', getCompanies);
-// GST lookup — open (auth optional) so the profile form can call it before the user has saved
-router.get('/gst-lookup', gstLookupHandler);
+// GST lookup for the profile form (app + website, both logged in). Each new
+// number is a paid check, so: login required, and at most 20 per customer per hour.
+const gstLookupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  keyGenerator: (req) => `gst-lookup:${req.user.id}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many GST lookups. Please try again in an hour.' },
+});
+router.get('/gst-lookup', protect, gstLookupLimiter, gstLookupHandler);
 router.put('/bank-details', protect, updateBankDetails);
 router.post('/bank-verify', protect, backFromArchive('Bank account verified'), verifyBankDetails);
 router.get('/dashboard', protect, getDashboard);
