@@ -4,6 +4,7 @@ const { verifyPAN } = require('../utils/panVerify');
 const { recordKycCheck } = require('../utils/kycChecks');
 const { recordSelfieCheck } = require('../utils/selfieCheck');
 const { aadhaarOtpOnOrDefault, isWithoutOtp } = require('../utils/aadhaarMode');
+const { customerKycStatus } = require('../utils/kycProgress');
 
 // Whether the Aadhaar step asks for an OTP right now (Admin → Settings → KYC).
 // Read on every request, outside the cached part, so a switch shows at once.
@@ -192,13 +193,21 @@ const getKYCStatus = async (req, res) => {
         is_kyc_verified: !!(userRows[0]?.is_kyc_verified),
       };
     } else {
+      const panVerified = !!(rows[0].pan_verified || userRows[0]?.pan_verified);
+      const aadhaarVerified = !!(rows[0].aadhaar_verified || userRows[0]?.aadhaar_verified);
+      const bankVerified = !!(bankRows[0]?.is_verified);
       response = {
         success: true,
-        status: rows[0].status,
-        kyc: { ...rows[0], bank_verified: !!(bankRows[0]?.is_verified) },
-        pan_verified: !!(rows[0].pan_verified || userRows[0]?.pan_verified),
-        aadhaar_verified: !!(rows[0].aadhaar_verified || userRows[0]?.aadhaar_verified),
-        bank_verified: !!(bankRows[0]?.is_verified),
+        // A KYC left half done is 'pending' in kyc_documents too: the customer
+        // sees 'not_submitted' ("Complete your KYC"), so the website and every
+        // app version keep the selfie + Submit steps open. kyc.status stays raw.
+        status: customerKycStatus({
+          isKycVerified: !!(userRows[0]?.is_kyc_verified), doc: rows[0], panVerified, aadhaarVerified, bankVerified,
+        }),
+        kyc: { ...rows[0], bank_verified: bankVerified },
+        pan_verified: panVerified,
+        aadhaar_verified: aadhaarVerified,
+        bank_verified: bankVerified,
         is_kyc_verified: !!(userRows[0]?.is_kyc_verified),
       };
     }
