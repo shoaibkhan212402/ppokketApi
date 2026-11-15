@@ -21,6 +21,14 @@ const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require
 const { auditLog } = require('../utils/audit');
 const { getUserCreditDetails } = require('./userController');
 const { isRefusedPassword } = require('./authController');
+const { ASSIGNABLE_ROLES, ROLE_LABELS, ensureRoleStorable, storedRole } = require('../utils/adminRoles');
+const {
+  CAPABILITIES, isPartnerRole, loadPartnerRoles, savePartnerRoles, hideContact, trimForPartner,
+} = require('../utils/partnerRoles');
+const {
+  LEAD_STATUSES, getActivity, getFollowUp, attachLeadActivity, readLeadUpdate, saveLeadUpdate,
+  listLeadUpdates, leadUpdatesCount, partnerWorkSummary,
+} = require('../utils/leadActivity');
 
 // Aadhaar numbers are shown in full to the super admin only: every other
 // admin is sent just the last four digits. DSA / bank partners are sent bank
@@ -44,8 +52,16 @@ const getAdminDashboard = async (req, res) => {
   try {
     const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
     const cacheKey = isPartner ? `admin:dashboard:partner:${req.admin.id}` : 'admin:dashboard';
+    // A partner's recent loans follow its role's switches (Admin Management →
+    // Roles) at the time they look, so the cached copy is trimmed on the way out.
+    const forViewer = (response) => {
+      if (!isPartner || !req.partnerCaps) return response;
+      const caps = req.partnerCaps;
+      const recent = caps.view_loans ? hideContact((response.recent_loans || []).map(l => ({ ...l })), caps) : [];
+      return { ...response, recent_loans: recent };
+    };
     const cached = await getCache(cacheKey);
-    if (cached) return res.json(cached);
+    if (cached) return res.json(forViewer(cached));
 
     let totalUsers, totalLoans, pendingLoans, approvedLoans, totalDisbursed, totalCollected, pendingKYC, recentLoans;
     // Customers in the Archive are not counted as users or pending KYC
@@ -95,7 +111,7 @@ const getAdminDashboard = async (req, res) => {
         recent_loans: recentLoans,
       };
       await setCache(cacheKey, response, CACHE_TTL.LONG);
-      return res.json(response);
+      return res.json(forViewer(response));
     } else {
       [[totalUsers]] = await pool.query(`SELECT COUNT(*) as count FROM users u WHERE 1 = 1${na}`);
       [[totalLoans]] = await pool.query('SELECT COUNT(*) as count FROM loans');
@@ -189,6 +205,10 @@ const getAllUsers = async (req, res) => {
       }
     }
     hideIdNumbers(req.admin, users);
+    // Next follow-up and last note on each lead
+    await attachLeadActivity(users);
+    // "Contact leads" off for this partner role: last 4 digits only, no email
+    if (isPartner) trimForPartner(users, req.partnerCaps);
 
     let countQuery = `SELECT COUNT(*) as total FROM users u WHERE (u.full_name LIKE ? OR u.mobile LIKE ? OR u.email LIKE ?)${na}`;
     const countParams = [searchParam, searchParam, searchParam];
@@ -201,39 +221,166 @@ const getAllUsers = async (req, res) => {
 
     // How many are in the Archive (super admin sees a link to it)
     const archived_total = req.admin.role === 'super_admin' ? await archivedCount() : undefined;
-    res.json({ success: true, users, total, page: parseInt(page), limit: parseInt(limit), archived_total });
+    res.json({
+      success: true, users, total, page: parseInt(page), limit: parseInt(limit), archived_total,
+      // A partner's page shows only what its role allows
+      capabilities: isPartner ? req.partnerCaps : undefined,
+    });
   } catch (err) {
     console.error('[getAllUsers]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-// PUT /api/admin/users/:userId/lead-status  (DSA partner CRM update)
-const VALID_LEAD_STATUSES = ['new', 'contacted', 'docs_submitted', 'kyc_pending', 'kyc_done', 'loan_applied', 'converted', 'inactive'];
+// The lead a request is about: a partner may only reach leads assigned to it.
+// Sends the error and resolves to null when it can't.
+const findLead = async (req, res) => {
+  const userId = parseInt(req.params.userId);
+  if (!userId) { res.status(400).json({ success: false, message: 'Invalid lead' }); return null; }
+  const [[lead]] = await pool.query(
+    'SELECT id, lead_status, dsa_custom_status, assigned_partner_id FROM users WHERE id = ?', [userId]
+  );
+  if (!lead) { res.status(404).json({ success: false, message: 'Lead not found' }); return null; }
+  if (isPartnerRole(req.admin.role) && lead.assigned_partner_id !== req.admin.id) {
+    res.status(403).json({ success: false, message: 'This lead is not assigned to you' });
+    return null;
+  }
+  return lead;
+};
 
+// Stage / note / follow-up on one lead, with a history row. A partner needs
+// its role's switches: "Change lead stage" for the stage, "Notes &
+// follow-ups" for the rest (Admin Management → Roles).
+const applyLeadUpdate = async (req, res, body) => {
+  const lead = await findLead(req, res);
+  if (!lead) return;
+  const update = readLeadUpdate(body, lead.lead_status);
+  if (update.error) return res.status(400).json({ success: false, message: update.error });
+
+  const caps = isPartnerRole(req.admin.role) ? (req.partnerCaps || {}) : null;
+  if (caps && update.toStatus && !caps.update_stage) {
+    return res.status(403).json({ success: false, code: 'PARTNER_NOT_ALLOWED', message: 'Your role cannot change the lead stage.' });
+  }
+  if (caps && (update.note || update.followUpAction) && !caps.add_notes) {
+    return res.status(403).json({ success: false, code: 'PARTNER_NOT_ALLOWED', message: 'Your role cannot add notes or follow-ups.' });
+  }
+
+  await saveLeadUpdate({ userId: lead.id, admin: req.admin, currentStatus: lead.lead_status, update });
+  // The partner's dashboard counts leads by stage
+  if (lead.assigned_partner_id) await delCache(`admin:dashboard:partner:${lead.assigned_partner_id}`);
+
+  const lead_status = update.toStatus || lead.lead_status || 'new';
+  const dsa_custom_status = update.note ? update.note.slice(0, 255) : lead.dsa_custom_status;
+  res.json({
+    success: true,
+    message: 'Lead updated',
+    lead_status,
+    dsa_custom_status,
+    follow_up: await getFollowUp(lead.id),
+    activity: await getActivity(lead.id),
+  });
+};
+
+// PUT /api/admin/users/:userId/lead-status  (older admin pages)
+//   { lead_status, dsa_custom_status } — the note now goes into the history too
 const updateLeadStatus = async (req, res) => {
   try {
-    const { userId } = req.params;
-    const { lead_status, dsa_custom_status } = req.body;
-    if (lead_status && !VALID_LEAD_STATUSES.includes(lead_status)) {
-      return res.status(400).json({ success: false, message: 'Invalid lead status value' });
-    }
-    const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin.role);
-    if (isPartner) {
-      const [[lead]] = await pool.query('SELECT id FROM users WHERE id = ? AND assigned_partner_id = ?', [userId, req.admin.id]);
-      if (!lead) return res.status(403).json({ success: false, message: 'This lead is not assigned to you' });
-    }
-    
-    if (lead_status !== undefined && dsa_custom_status !== undefined) {
-      await pool.query('UPDATE users SET lead_status = ?, dsa_custom_status = ? WHERE id = ?', [lead_status, dsa_custom_status, userId]);
-    } else if (lead_status !== undefined) {
-      await pool.query('UPDATE users SET lead_status = ? WHERE id = ?', [lead_status, userId]);
-    } else if (dsa_custom_status !== undefined) {
-      await pool.query('UPDATE users SET dsa_custom_status = ? WHERE id = ?', [dsa_custom_status, userId]);
-    }
-    res.json({ success: true, message: 'Lead status updated', lead_status, dsa_custom_status });
+    const { lead_status, dsa_custom_status } = req.body || {};
+    await applyLeadUpdate(req, res, { lead_status, note: typeof dsa_custom_status === 'string' ? dsa_custom_status : undefined });
   } catch (err) {
     console.error('[updateLeadStatus]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/leads/:userId/activity — notes history + next follow-up
+const getLeadActivity = async (req, res) => {
+  try {
+    const lead = await findLead(req, res);
+    if (!lead) return;
+    res.json({
+      success: true,
+      lead_status: lead.lead_status || 'new',
+      dsa_custom_status: lead.dsa_custom_status,
+      follow_up: await getFollowUp(lead.id),
+      activity: await getActivity(lead.id),
+    });
+  } catch (err) {
+    console.error('[getLeadActivity]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/admin/leads/:userId/activity
+//   { lead_status?, note?, follow_up_at? (ISO), follow_up_done?, clear_follow_up? }
+const addLeadActivity = async (req, res) => {
+  try {
+    await applyLeadUpdate(req, res, req.body);
+  } catch (err) {
+    console.error('[addLeadActivity]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/lead-updates — every update the DSA / Bank partners made on
+// their leads, newest first, plus how much each partner is working.
+//   ?who=partners|all  &author_id=  &period=today|7d|30d  &type=stage|note|follow_up  &before_id=  &limit=
+const getLeadUpdates = async (req, res) => {
+  try {
+    const { who, author_id, period, type, before_id, limit } = req.query;
+    const feed = await listLeadUpdates({
+      who: who === 'all' ? 'all' : 'partners',
+      authorId: parseInt(author_id) || null,
+      period, type,
+      beforeId: parseInt(before_id) || null,
+      limit,
+    });
+    // The partner table only with the first page
+    const partners = before_id ? undefined : await partnerWorkSummary();
+    const { latest_id } = await leadUpdatesCount(0);
+    res.json({ success: true, ...feed, partners, latest_id });
+  } catch (err) {
+    console.error('[getLeadUpdates]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/lead-updates/count?after_id= — for the sidebar badge
+const getLeadUpdatesCount = async (req, res) => {
+  try {
+    res.json({ success: true, ...(await leadUpdatesCount(parseInt(req.query.after_id) || 0)) });
+  } catch (err) {
+    console.error('[getLeadUpdatesCount]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// GET /api/admin/partner-roles — what DSA / Bank partners may do
+const getPartnerRoles = async (req, res) => {
+  try {
+    const roles = await loadPartnerRoles();
+    const [countRows] = await pool.query(
+      "SELECT role, COUNT(*) AS total, SUM(is_active = 1) AS active FROM admins WHERE role IN ('dsa_partner', 'bank_partner') GROUP BY role"
+    );
+    const accounts = {};
+    for (const r of countRows) accounts[r.role] = { total: Number(r.total), active: Number(r.active || 0) };
+    res.json({ success: true, roles, capabilities: CAPABILITIES, accounts, lead_stages: LEAD_STATUSES });
+  } catch (err) {
+    console.error('[getPartnerRoles]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PUT /api/admin/partner-roles  { dsa_partner: { view_contact: true, … }, bank_partner: { … } }
+const updatePartnerRoles = async (req, res) => {
+  try {
+    const before = await loadPartnerRoles();
+    const roles = await savePartnerRoles(req.body?.roles || req.body);
+    await auditLog({ req, action: 'partner_roles_updated', entityType: 'setting', details: { before, after: roles } });
+    res.json({ success: true, message: 'Partner roles saved', roles });
+  } catch (err) {
+    if (err.isValidation) return res.status(400).json({ success: false, message: err.message });
+    console.error('[updatePartnerRoles]', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -335,6 +482,7 @@ const getAllLoans = async (req, res) => {
         // The bank account a payout goes to is for the staff who send it
         delete loan.payout_account_holder; delete loan.payout_account_number; delete loan.payout_ifsc; delete loan.payout_bank_name;
       }
+      trimForPartner(loans, req.partnerCaps);
     }
     res.json({ success: true, loans });
   } catch (err) {
@@ -1135,6 +1283,14 @@ const disburseLoan = async (req, res) => {
 const getLoanEMISchedule = async (req, res) => {
   try {
     const loanId = req.params.id;
+    // A partner sees only the loans of leads assigned to it
+    if (isPartnerRole(req.admin.role)) {
+      const [[own]] = await pool.query(
+        'SELECT l.id FROM loans l JOIN users u ON u.id = l.user_id WHERE l.id = ? AND u.assigned_partner_id = ?',
+        [loanId, req.admin.id]
+      );
+      if (!own) return res.status(403).json({ success: false, message: 'This loan is not of a lead assigned to you' });
+    }
     const [schedule] = await pool.query(
       'SELECT * FROM emi_schedule WHERE loan_id = ? ORDER BY installment_no ASC',
       [loanId]
@@ -1574,7 +1730,7 @@ const createAdmin = async (req, res) => {
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: 'Name, email and password are required' });
     }
-    if (!['admin', 'reviewer', 'dsa_partner', 'bank_partner'].includes(role)) {
+    if (!ASSIGNABLE_ROLES.includes(role)) {
       return res.status(400).json({ success: false, message: 'Role must be admin, reviewer, dsa_partner, or bank_partner' });
     }
     if (isRefusedPassword(password)) {
@@ -1585,6 +1741,14 @@ const createAdmin = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Admin with this email already exists' });
     }
 
+    // Older databases can't hold the partner roles: without this a DSA / Bank
+    // partner was saved with role '' and became a full admin.
+    try {
+      await ensureRoleStorable(role);
+    } catch (err) {
+      return res.status(500).json({ success: false, code: err.code, message: err.message });
+    }
+
     const salt = await bcrypt.genSalt(10);
     const hashedPwd = await bcrypt.hash(password, salt);
 
@@ -1593,6 +1757,18 @@ const createAdmin = async (req, res) => {
       [name, email.toLowerCase().trim(), hashedPwd, role, req.admin.id]
     );
     const newAdminId = result.insertId;
+
+    // Never leave behind an account whose role didn't save.
+    const saved = await storedRole(newAdminId);
+    if (saved !== role) {
+      await pool.query('DELETE FROM admins WHERE id = ?', [newAdminId]);
+      console.error(`[createAdmin] Role '${role}' was saved as '${saved}' — account removed.`);
+      return res.status(500).json({
+        success: false,
+        code: 'ROLE_NOT_STORABLE',
+        message: 'The database did not save this role, so the account was not created. Run backend/config/migration_partner_roles.sql once, then try again.',
+      });
+    }
 
     // Merge provided permissions with defaults
     const perms = { ...DEFAULT_PERMISSIONS, ...permissions };
@@ -1617,7 +1793,8 @@ const createAdmin = async (req, res) => {
       ]
     );
 
-    res.status(201).json({ success: true, message: 'Admin created successfully', admin_id: newAdminId });
+    await auditLog({ req, action: 'admin_created', entityType: 'admin', entityId: newAdminId, details: { name, role } });
+    res.status(201).json({ success: true, message: `${ROLE_LABELS[role] || 'Admin'} created successfully`, admin_id: newAdminId, role });
   } catch (err) {
     console.error('[createAdmin]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -1628,7 +1805,7 @@ const createAdmin = async (req, res) => {
 const updateAdmin = async (req, res) => {
   try {
     const targetId = parseInt(req.params.id);
-    const { name, email, password } = req.body;
+    const { name, email, password, role } = req.body;
 
     const [existing] = await pool.query('SELECT id, role FROM admins WHERE id = ?', [targetId]);
     if (!existing.length) return res.status(404).json({ success: false, message: 'Admin not found' });
@@ -1637,6 +1814,22 @@ const updateAdmin = async (req, res) => {
     }
     if (isRefusedPassword(password)) {
       return res.status(400).json({ success: false, message: UNUSABLE_PASSWORD_MESSAGE });
+    }
+
+    // Role change (also how an account saved with a blank role gets fixed)
+    const changeRole = role !== undefined && role !== existing[0].role;
+    if (changeRole) {
+      if (existing[0].role === 'super_admin' || targetId === req.admin.id) {
+        return res.status(400).json({ success: false, message: 'The role of a super admin cannot be changed' });
+      }
+      if (!ASSIGNABLE_ROLES.includes(role)) {
+        return res.status(400).json({ success: false, message: 'Role must be admin, reviewer, dsa_partner, or bank_partner' });
+      }
+      try {
+        await ensureRoleStorable(role);
+      } catch (err) {
+        return res.status(500).json({ success: false, code: err.code, message: err.message });
+      }
     }
 
     const updates = [];
@@ -1648,11 +1841,31 @@ const updateAdmin = async (req, res) => {
       updates.push('password = ?');
       params.push(await bcrypt.hash(password, salt));
     }
+    if (changeRole) { updates.push('role = ?'); params.push(role); }
 
     if (!updates.length) return res.status(400).json({ success: false, message: 'Nothing to update' });
     params.push(targetId);
     await pool.query(`UPDATE admins SET ${updates.join(', ')} WHERE id = ?`, params);
-    res.json({ success: true, message: 'Admin updated successfully' });
+
+    if (changeRole) {
+      const saved = await storedRole(targetId);
+      if (saved !== role) {
+        // Put the old role back rather than leave a blank one
+        await pool.query('UPDATE admins SET role = ? WHERE id = ?', [existing[0].role, targetId]);
+        return res.status(500).json({
+          success: false,
+          code: 'ROLE_NOT_STORABLE',
+          message: 'The database did not save this role. Run backend/config/migration_partner_roles.sql once, then try again.',
+        });
+      }
+      // The sign-in check caches the account for a minute — drop it so the new role counts now
+      await delCache(`admin:auth:${targetId}`).catch(() => {});
+      await auditLog({
+        req, action: 'admin_role_changed', entityType: 'admin', entityId: targetId,
+        details: { from: existing[0].role || '(blank)', to: role },
+      });
+    }
+    res.json({ success: true, message: changeRole ? `Role set to ${ROLE_LABELS[role]}` : 'Admin updated successfully', role: changeRole ? role : existing[0].role });
   } catch (err) {
     console.error('[updateAdmin]', err);
     res.status(500).json({ success: false, message: err.message });
@@ -2015,7 +2228,8 @@ module.exports = {
   // New Partner endpoints
   getDsaBankPartners, assignUserPartner,
   // Lead management (DSA partner CRM)
-  updateLeadStatus, getLeadKycDetails,
+  updateLeadStatus, getLeadKycDetails, getLeadActivity, addLeadActivity,
+  getPartnerRoles, updatePartnerRoles, getLeadUpdates, getLeadUpdatesCount,
   // KYC verification data (super admin)
   getCustomerKycChecks, getCustomerKycCheck,
   // Audit

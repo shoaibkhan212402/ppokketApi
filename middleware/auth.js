@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const { pool } = require('../config/db');
 const { getCache, setCache } = require('../config/redis');
+const { isKnownRole, ROLE_NOT_SET_MESSAGE } = require('../utils/adminRoles');
+const { isPartnerRole, capabilitiesFor } = require('../utils/partnerRoles');
 
 const protect = async (req, res, next) => {
   let token;
@@ -98,6 +100,11 @@ const adminProtect = async (req, res, next) => {
     if (!rows.length) return res.status(401).json({ success: false, message: 'Admin not found' });
 
     const row = rows[0];
+    // A DSA / Bank partner saved on an older database got role '' — it must
+    // not be treated as an admin (it would see every customer).
+    if (!isKnownRole(row.role)) {
+      return res.status(403).json({ success: false, code: 'ROLE_NOT_SET', message: ROLE_NOT_SET_MESSAGE });
+    }
     const adminData = { id: row.id, name: row.name, email: row.email, role: row.role };
     let permissionsData = {};
 
@@ -149,23 +156,18 @@ const requireSuperAdmin = (req, res, next) => {
   next();
 };
 
-// Factory: check a specific permission key
+const PARTNER_REFUSED = {
+  success: false,
+  code: 'PARTNER_NOT_ALLOWED',
+  message: 'Your role does not allow this. Ask the super admin (Admin Management → Roles).',
+};
+
+// Factory: check a specific permission key.
+// DSA / Bank partners are refused here whatever their permission row says:
+// the few routes they may use are opened with forPartners() below.
 const requirePermission = (permission) => (req, res, next) => {
   if (req.admin?.role === 'super_admin') return next();
-
-  // Auto-grant basic operational permissions to DSA/Bank Partners
-  const isPartner = ['dsa_partner', 'bank_partner'].includes(req.admin?.role);
-  const partnerPermissions = [
-    'view_dashboard', 
-    'manage_users', 
-    'manage_loans', 
-    'manage_kyc', 
-    'view_transactions', 
-    'manage_referrals'
-  ];
-  if (isPartner && partnerPermissions.includes(permission)) {
-    return next();
-  }
+  if (isPartnerRole(req.admin?.role)) return res.status(403).json(PARTNER_REFUSED);
 
   if (!req.adminPermissions?.[permission]) {
     return res.status(403).json({ success: false, message: 'You do not have permission to perform this action' });
@@ -173,4 +175,20 @@ const requirePermission = (permission) => (req, res, next) => {
   next();
 };
 
-module.exports = { protect, adminProtect, requireSuperAdmin, requirePermission };
+// A route a DSA / Bank partner may also use — the handler keeps them to the
+// leads assigned to them. `capability` is the Admin Management → Roles switch
+// it needs (null = always open to partners). Everyone else needs `permission`.
+// Sets req.partnerCaps (the role's switches) for partners.
+const forPartners = (permission, capability = null) => async (req, res, next) => {
+  if (!isPartnerRole(req.admin?.role)) return requirePermission(permission)(req, res, next);
+  try {
+    req.partnerCaps = await capabilitiesFor(req.admin.role);
+  } catch (err) {
+    console.error('❌ Could not read partner role switches:', err.message);
+    return res.status(500).json({ success: false, message: 'Could not check your role. Try again.' });
+  }
+  if (capability && !req.partnerCaps[capability]) return res.status(403).json(PARTNER_REFUSED);
+  next();
+};
+
+module.exports = { protect, adminProtect, requireSuperAdmin, requirePermission, forPartners };

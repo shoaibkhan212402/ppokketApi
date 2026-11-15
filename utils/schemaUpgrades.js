@@ -8,8 +8,8 @@ const { pool } = require('../config/db');
 // for an ENUM). Nothing is dropped, renamed or emptied, each step first checks
 // whether it is still needed, and an ENUM is extended from the definition the
 // database actually has — never replaced by a list written here — so values
-// this file doesn't know about are kept. The matching hand-run file is
-// config/migration_autopay.sql.
+// this file doesn't know about are kept. The matching hand-run files are
+// config/migration_autopay.sql and config/migration_partner_roles.sql.
 
 const LOCK = 'ppokket_schema_upgrade';
 
@@ -42,6 +42,17 @@ const allowEnumValue = async (conn, table, column, value) => {
 };
 
 const UPGRADES = [
+  {
+    // Older databases allow only super_admin / admin / reviewer, so a DSA or
+    // Bank partner was saved with role '' (and shown, and let in, as an admin).
+    // utils/adminRoles.js also does this the first time a partner is created.
+    name: "admins.role allows 'dsa_partner' and 'bank_partner'",
+    async apply(conn) {
+      const a = await allowEnumValue(conn, 'admins', 'role', 'dsa_partner');
+      const b = await allowEnumValue(conn, 'admins', 'role', 'bank_partner');
+      return a || b;
+    },
+  },
   {
     // Code parks a mandate as 'inactive' when its loan closes.
     name: "bank_mandates.status allows 'inactive'",
@@ -86,4 +97,4 @@ const applySchemaUpgrades = async () => {
   }
 };
 
-module.exports = { applySchemaUpgrades };
+module.exports = { applySchemaUpgrades, allowEnumValue, columnInfo };

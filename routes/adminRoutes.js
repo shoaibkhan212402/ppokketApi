@@ -19,12 +19,13 @@ const {
   // New Partner endpoints
   getDsaBankPartners, assignUserPartner,
   // Lead management (DSA partner CRM)
-  updateLeadStatus, getLeadKycDetails,
+  updateLeadStatus, getLeadKycDetails, getLeadActivity, addLeadActivity,
+  getPartnerRoles, updatePartnerRoles, getLeadUpdates, getLeadUpdatesCount,
   // Audit
   getAuditLog,
   setLoanSettlement,
 } = require('../controllers/adminController');
-const { adminProtect, requireSuperAdmin, requirePermission } = require('../middleware/auth');
+const { adminProtect, requireSuperAdmin, requirePermission, forPartners } = require('../middleware/auth');
 const {
   adminGetReports: adminGetCibilReports,
   adminGetReportDetail: adminGetCibilReportDetail,
@@ -38,7 +39,9 @@ const {
   adminDeleteReport: adminDeleteExperianReport
 } = require('../controllers/experianController');
 const { adminGetReferrals, adminCreditReferral } = require('../controllers/referralController');
-const { getContactMessages, toggleContactMessageRead } = require('../controllers/contactController');
+const {
+  getContactMessages, toggleContactMessageRead, deleteContactMessage, deleteContactMessages,
+} = require('../controllers/contactController');
 const { adminGetAllInvestments, adminGetInvestmentDetail, adminCompleteWithdrawal, adminRejectWithdrawal } = require('../controllers/investmentController');
 const { getLoanCharges, updateLoanCharges } = require('../controllers/chargesController');
 const { getCoupons, addCoupon, editCoupon, removeCoupon } = require('../controllers/couponController');
@@ -48,6 +51,7 @@ const {
 const { getArchived, getArchiveCandidates, archive, restore } = require('../controllers/archiveController');
 const upload = require('../middleware/upload');
 const { pool } = require('../config/db');
+const { capabilitiesFor } = require('../utils/partnerRoles');
 
 // Documents a super admin uploads for a customer: the same checks as the
 // customer's own uploads, stored in that customer's folder.
@@ -75,8 +79,11 @@ const { getAadhaarOtpSetting, setAadhaarOtpSetting } = require('../controllers/a
 router.use(adminProtect); // All admin routes protected
 
 // Returns logged-in admin's own permissions (frontend refresh after permission change)
-router.get('/me', (req, res) => {
+router.get('/me', async (req, res) => {
   const isSuper = req.admin.role === 'super_admin';
+  // A DSA / Bank partner also gets its role's switches (Admin Management → Roles)
+  let capabilities;
+  try { capabilities = await capabilitiesFor(req.admin.role) || undefined; } catch { capabilities = undefined; }
   res.json({
     success: true,
     admin: { id: req.admin.id, name: req.admin.name, email: req.admin.email, role: req.admin.role },
@@ -85,17 +92,20 @@ router.get('/me', (req, res) => {
       view_transactions: true, manage_transactions: true, send_notifications: true,
       manage_referrals: true, manage_settings: true, manage_admins: true, manage_dsa: true,
     } : req.adminPermissions,
+    capabilities,
   });
 });
 
-router.get('/dashboard', requirePermission('view_dashboard'), getAdminDashboard);
-router.get('/users', requirePermission('manage_users'), getAllUsers);
+// forPartners: DSA / Bank partners may use these too, kept to their own leads
+// (the second argument is the Admin Management → Roles switch it needs)
+router.get('/dashboard', forPartners('view_dashboard'), getAdminDashboard);
+router.get('/users', forPartners('manage_users'), getAllUsers);
 router.put('/users/:userId/credit-limit', requirePermission('manage_users'), updateCreditLimit);
 router.put('/users/:userId/toggle-status', requirePermission('manage_users'), toggleUserStatus);
 router.put('/users/:userId/withdrawal-limit', requirePermission('manage_users'), setWithdrawalLimit);
 router.put('/users/:userId/custom-charges',   requirePermission('manage_users'), setUserCustomCharges);
-router.get('/loans', requirePermission('manage_loans'), getAllLoans);
-router.get('/loans/:id/emi-schedule', requirePermission('manage_loans'), getLoanEMISchedule);
+router.get('/loans', forPartners('manage_loans', 'view_loans'), getAllLoans);
+router.get('/loans/:id/emi-schedule', forPartners('manage_loans', 'view_loans'), getLoanEMISchedule);
 router.get('/overdue-emis', requirePermission('manage_loans'), getOverdueEmis);
 router.put('/emi/:id/penalty-waiver', requirePermission('manage_loans'), setPenaltyWaiver);
 router.put('/loans/:id/settlement', requirePermission('manage_loans'), setLoanSettlement);
@@ -169,6 +179,9 @@ router.post('/investments/:id/reject-withdrawal', requireSuperAdmin, adminReject
 
 router.get('/contact-messages', requirePermission('view_dashboard'), getContactMessages);
 router.patch('/contact-messages/:id/toggle-read', requirePermission('view_dashboard'), toggleContactMessageRead);
+// Deleting cannot be undone — super admin only
+router.post('/contact-messages/delete', requireSuperAdmin, deleteContactMessages);
+router.delete('/contact-messages/:id', requireSuperAdmin, deleteContactMessage);
 
 // DSA Management
 router.get('/dsa/partners', requirePermission('manage_dsa'), getAllDsaPartners);
@@ -180,8 +193,17 @@ router.get('/dsa-bank-list', requirePermission('manage_users'), getDsaBankPartne
 router.put('/users/:userId/assign-partner', requireSuperAdmin, assignUserPartner);
 
 // Lead CRM (DSA / bank partners update their lead pipeline)
-router.put('/users/:userId/lead-status', requirePermission('manage_users'), updateLeadStatus);
-router.get('/users/:userId/kyc-details', requirePermission('manage_users'), getLeadKycDetails);
+router.put('/users/:userId/lead-status', forPartners('manage_users'), updateLeadStatus);
+router.get('/users/:userId/kyc-details', forPartners('manage_users', 'view_kyc'), getLeadKycDetails);
+// Lead follow-up: notes history, stage, next follow-up date
+router.get('/leads/:userId/activity', forPartners('manage_users'), getLeadActivity);
+router.post('/leads/:userId/activity', forPartners('manage_users'), addLeadActivity);
+// Everything the partners logged, for the super admin (partners are refused)
+router.get('/lead-updates', requirePermission('manage_users'), getLeadUpdates);
+router.get('/lead-updates/count', requirePermission('manage_users'), getLeadUpdatesCount);
+// What DSA / Bank partners may do (Admin Management → Roles)
+router.get('/partner-roles', requireSuperAdmin, getPartnerRoles);
+router.put('/partner-roles', requireSuperAdmin, updatePartnerRoles);
 
 // Audit log (super_admin only)
 router.get('/audit-log', requireSuperAdmin, getAuditLog);

@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const { pool } = require('../config/db');
 const { redisClient } = require('../config/redis');
 const { kycStatusOf } = require('../utils/kycProgress');
+const { isKnownRole, ROLE_NOT_SET_MESSAGE } = require('../utils/adminRoles');
 
 // OTP config
 const OTP_TTL_SECONDS    = 5 * 60;  // 5 minutes
@@ -381,6 +382,11 @@ const adminLogin = async (req, res) => {
     }
 
     await redisClient.del(failKey);
+    // Right password, but the role never saved (a partner made on an older
+    // database has role ''): don't let it in as an admin.
+    if (!isKnownRole(admin.role)) {
+      return res.status(403).json({ success: false, code: 'ROLE_NOT_SET', message: ROLE_NOT_SET_MESSAGE });
+    }
     await pool.query('UPDATE admins SET last_login = NOW() WHERE id = ?', [admin.id]);
     const token = generateToken(admin.id, 'admin');
 

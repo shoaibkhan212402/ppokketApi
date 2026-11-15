@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS admins (
   name       VARCHAR(150) NOT NULL,
   email      VARCHAR(191) NOT NULL UNIQUE,
   password   VARCHAR(255) NOT NULL,
-  role       ENUM('super_admin','admin','reviewer') DEFAULT 'admin',
+  role       ENUM('super_admin','admin','reviewer','dsa_partner','bank_partner') DEFAULT 'admin',
   is_active  TINYINT(1) DEFAULT 1,
   created_by INT DEFAULT NULL,
   last_login TIMESTAMP NULL,

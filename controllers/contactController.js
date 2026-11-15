@@ -1,5 +1,20 @@
 const { pool } = require('../config/db');
 const { sendContactAcknowledgementEmail } = require('../utils/email');
+const { auditLog } = require('../utils/audit');
+
+// The WHERE for a list filter: status all | unread | read, plus free-text search
+const filterSql = (status, search) => {
+  let where = '';
+  const params = [];
+  if (status === 'unread') where += ' AND is_read = 0';
+  if (status === 'read') where += ' AND is_read = 1';
+  if (search) {
+    where += ' AND (name LIKE ? OR email LIKE ? OR subject LIKE ? OR message LIKE ?)';
+    const q = `%${search}%`;
+    params.push(q, q, q, q);
+  }
+  return { where, params };
+};
 
 // POST /api/contact  (public)
 const submitContactMessage = async (req, res) => {
@@ -31,15 +46,7 @@ const getContactMessages = async (req, res) => {
     const { page = 1, limit = 25, status = 'all', search = '' } = req.query;
     const offset = (page - 1) * limit;
 
-    let where = '';
-    const params = [];
-    if (status === 'unread') where += ' AND is_read = 0';
-    if (status === 'read') where += ' AND is_read = 1';
-    if (search) {
-      where += ' AND (name LIKE ? OR email LIKE ? OR subject LIKE ? OR message LIKE ?)';
-      const q = `%${search}%`;
-      params.push(q, q, q, q);
-    }
+    const { where, params } = filterSql(status, search);
 
     const [messages] = await pool.query(
       `SELECT * FROM contact_messages WHERE 1=1 ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
@@ -79,4 +86,47 @@ const toggleContactMessageRead = async (req, res) => {
   }
 };
 
-module.exports = { submitContactMessage, getContactMessages, toggleContactMessageRead };
+// DELETE /api/admin/contact-messages/:id  (super admin)
+const deleteContactMessage = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const [result] = await pool.query('DELETE FROM contact_messages WHERE id = ?', [id]);
+    if (!result.affectedRows) return res.status(404).json({ success: false, message: 'Message not found' });
+    await auditLog({ req, action: 'contact_messages_deleted', entityType: 'contact_message', entityId: id, details: { count: 1 } });
+    res.json({ success: true, deleted: 1, message: 'Message deleted' });
+  } catch (err) {
+    console.error('[deleteContactMessage]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/admin/contact-messages/delete  (super admin)
+//   { ids: [1, 2, …] }                          — the ticked messages
+//   { all: true, status: 'all'|'unread'|'read', search } — every message the filter shows
+const deleteContactMessages = async (req, res) => {
+  try {
+    const { ids, all, status = 'all', search = '' } = req.body || {};
+    let result;
+    let details;
+    if (all === true) {
+      const { where, params } = filterSql(status, search);
+      [result] = await pool.query(`DELETE FROM contact_messages WHERE 1=1 ${where}`, params);
+      details = { all: true, status, search: search || undefined };
+    } else {
+      const list = Array.isArray(ids) ? [...new Set(ids.map(n => parseInt(n)).filter(n => n > 0))] : [];
+      if (!list.length) return res.status(400).json({ success: false, message: 'Choose the messages to delete' });
+      if (list.length > 1000) return res.status(400).json({ success: false, message: 'Too many at once (max 1000)' });
+      [result] = await pool.query('DELETE FROM contact_messages WHERE id IN (?)', [list]);
+      details = { ids: list };
+    }
+    await auditLog({ req, action: 'contact_messages_deleted', entityType: 'contact_message', details: { ...details, count: result.affectedRows } });
+    res.json({ success: true, deleted: result.affectedRows, message: `${result.affectedRows} message${result.affectedRows === 1 ? '' : 's'} deleted` });
+  } catch (err) {
+    console.error('[deleteContactMessages]', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+module.exports = {
+  submitContactMessage, getContactMessages, toggleContactMessageRead, deleteContactMessage, deleteContactMessages,
+};
