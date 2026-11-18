@@ -439,7 +439,8 @@ const getAllLoans = async (req, res) => {
              bd.account_holder AS payout_account_holder, bd.account_number AS payout_account_number,
              bd.ifsc_code AS payout_ifsc, bd.bank_name AS payout_bank_name,
              (SELECT e.emi_amount FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_amount,
-             (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date
+             (SELECT e.due_date FROM emi_schedule e WHERE e.loan_id = l.id AND e.status NOT IN ('paid','waived') ORDER BY e.installment_no ASC LIMIT 1) AS next_emi_date,
+             (SELECT bm.status FROM bank_mandates bm WHERE bm.user_id = l.user_id LIMIT 1) AS mandate_status
       FROM loans l
       JOIN users u ON u.id = l.user_id
       LEFT JOIN bank_details bd ON bd.user_id = l.user_id
@@ -828,43 +829,93 @@ const setWithdrawalLimit = async (req, res) => {
   }
 };
 
-// PUT /api/admin/reject-loan/:id
+// A loan can be stopped only while no money has gone out. After approval the
+// customer still has to set up Auto-Pay and accept the agreement; one who never
+// does would otherwise sit at "approved" for ever, holding their credit limit.
+const REJECTABLE_LOAN_STATUSES = ['pending', 'under_review', 'approved', 'withdrawal_requested'];
+
+// PUT /api/admin/reject-loan/:id   { reason }
+// pending / under_review → the application is rejected.
+// approved / withdrawal_requested → the withdrawal is cancelled: the repayment
+// schedule made at approval is removed (nothing was paid on it), which frees
+// the credit limit; a coupon used on it counts as unused again (utils/coupons.js
+// ignores rejected loans). Disbursed / closed loans are refused.
 const rejectLoan = async (req, res) => {
+  const conn = await pool.getConnection();
   try {
-    const { reason } = req.body;
-    const loanId = req.params.id;
+    const loanId = parseInt(req.params.id);
+    const reasonIn = String(req.body?.reason || '').trim().slice(0, 500);
 
-    const [loan] = await pool.query('SELECT * FROM loans WHERE id = ?', [loanId]);
-    if (!loan.length) return res.status(404).json({ success: false, message: 'Loan not found' });
+    await conn.beginTransaction();
+    const [[loan]] = await conn.query('SELECT id, user_id, status, amount FROM loans WHERE id = ? FOR UPDATE', [loanId]);
+    if (!loan) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: 'Loan not found' });
+    }
+    if (!REJECTABLE_LOAN_STATUSES.includes(loan.status)) {
+      await conn.rollback();
+      return res.status(409).json({
+        success: false,
+        message: loan.status === 'rejected'
+          ? 'This loan is already rejected.'
+          : 'The money for this loan has already been sent, so it cannot be rejected.',
+      });
+    }
 
-    await pool.query(
-      `UPDATE loans SET status = 'rejected', rejected_reason = ? WHERE id = ?`,
-      [reason || 'Application did not meet eligibility criteria', loanId]
-    );
+    const afterApproval = ['approved', 'withdrawal_requested'].includes(loan.status);
+    const reason = reasonIn || (afterApproval
+      ? 'Auto-Pay and the loan agreement were not completed'
+      : 'Application did not meet eligibility criteria');
 
-    const title = 'Loan Application Update';
-    const message = `Your loan application has been rejected. Reason: ${reason || 'Eligibility criteria not met'}. You may apply again after 30 days.`;
+    await conn.query(`UPDATE loans SET status = 'rejected', rejected_reason = ? WHERE id = ?`, [reason, loanId]);
 
-    await pool.query(
+    let scheduleRemoved = 0;
+    if (afterApproval) {
+      const [[paid]] = await conn.query("SELECT COUNT(*) AS n FROM emi_schedule WHERE loan_id = ? AND status = 'paid'", [loanId]);
+      if (!Number(paid.n)) {
+        const [del] = await conn.query('DELETE FROM emi_schedule WHERE loan_id = ?', [loanId]);
+        scheduleRemoved = del.affectedRows || 0;
+        await conn.query('UPDATE loans SET next_emi_date = NULL WHERE id = ?', [loanId]);
+        try {
+          await conn.query('DELETE FROM emi_charge_items WHERE loan_id = ?', [loanId]);
+        } catch (err) {
+          if (err.code !== 'ER_NO_SUCH_TABLE') throw err;
+        }
+      }
+    }
+
+    const title = afterApproval ? 'Withdrawal Cancelled' : 'Loan Application Update';
+    const message = afterApproval
+      ? `Your approved withdrawal of ₹${Number(loan.amount).toLocaleString('en-IN')} (Loan #${loan.id}) has been cancelled. Reason: ${reason}. No money was sent and nothing is owed. You can apply again from the app.`
+      : `Your loan application has been rejected. Reason: ${reason}. You may apply again after 30 days.`;
+    await conn.query(
       'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
-      [loan[0].user_id, title, message, 'loan']
+      [loan.user_id, title, message, 'loan']
     );
+    await conn.commit();
 
-    const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [loan[0].user_id]);
+    const [user] = await pool.query('SELECT fcm_token FROM users WHERE id = ?', [loan.user_id]);
     if (user[0]?.fcm_token) {
-      await sendNotification(user[0].fcm_token, title, message, { screen: 'Profile', params: { screen: 'LoanHistory' } });
+      await sendNotification(user[0].fcm_token, title, message, { screen: 'Profile', params: { screen: 'LoanHistory' } }).catch(() => {});
     }
 
     await auditLog({
-      req, action: 'loan_rejected', entityType: 'loan', entityId: loanId,
-      details: { reason: reason || 'Eligibility criteria not met', user_id: loan[0].user_id }
+      req, action: afterApproval ? 'withdrawal_cancelled' : 'loan_rejected', entityType: 'loan', entityId: loanId,
+      details: { reason, previous_status: loan.status, user_id: loan.user_id, schedule_removed: scheduleRemoved },
     });
-    res.json({ success: true, message: 'Loan rejected' });
-    await invalidateUserCache(loan[0].user_id);
+    await invalidateUserCache(loan.user_id);
     await delCache('admin:dashboard', 'admin:dashboard:partner:*');
+    res.json({
+      success: true,
+      message: afterApproval ? 'Withdrawal cancelled — the customer has been told' : 'Loan rejected',
+      previous_status: loan.status,
+    });
   } catch (err) {
+    try { await conn.rollback(); } catch (_) { /* nothing to undo */ }
     console.error('[rejectLoan]', err);
     res.status(500).json({ success: false, message: err.message });
+  } finally {
+    conn.release();
   }
 };
 
