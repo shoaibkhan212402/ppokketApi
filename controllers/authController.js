@@ -94,12 +94,34 @@ const sendOtpViaSms = async (mobile, otp, template = null) => {
   return data;
 };
 
+// A customer the admin has blocked (Admin → Users → Block User) gets no OTP:
+// the SMS costs money and the login would be refused anyway. They are told
+// who to contact instead. The app and the website show `message` as it is.
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@ppokket.com';
+const SUPPORT_WHATSAPP = process.env.SUPPORT_WHATSAPP || '+91 81780 31447';
+const ACCOUNT_BLOCKED = {
+  success: false,
+  code: 'ACCOUNT_BLOCKED',
+  message: `Your account has been blocked. Please contact the Ppokket support team at ${SUPPORT_EMAIL} or on WhatsApp ${SUPPORT_WHATSAPP}.`,
+  support: { email: SUPPORT_EMAIL, whatsapp: SUPPORT_WHATSAPP },
+};
+// is_active NULL counts as active (only an explicit 0 is a block)
+const isBlockedMobile = async (mobile) => {
+  const [[row]] = await pool.query('SELECT is_active FROM users WHERE mobile = ? LIMIT 1', [mobile]);
+  return !!row && row.is_active !== null && Number(row.is_active) === 0;
+};
+
 // POST /api/auth/send-otp
 const sendOTP = async (req, res) => {
   try {
     const { mobile } = req.body;
     if (!mobile || !/^\d{10}$/.test(mobile)) {
       return res.status(400).json({ success: false, message: 'Invalid mobile number' });
+    }
+
+    // Blocked: no SMS, no OTP stored, no rate-limit counters used
+    if (await isBlockedMobile(mobile)) {
+      return res.status(403).json(ACCOUNT_BLOCKED);
     }
 
     // Check if mobile is locked out
@@ -157,6 +179,12 @@ const handleVerifyAndLogin = async (mobile, otp, res, referralCode = null) => {
   }
   if (!otp || !/^\d{6}$/.test(otp)) {
     return res.status(400).json({ success: false, message: 'Enter a valid 6-digit OTP' });
+  }
+
+  // Blocked after the OTP went out (or an old OTP): no login token
+  if (await isBlockedMobile(mobile)) {
+    await redisClient.del(`otp:${mobile}`);
+    return res.status(403).json(ACCOUNT_BLOCKED);
   }
 
   // Lockout check
