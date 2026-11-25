@@ -186,6 +186,8 @@ const cleanOldAuditLogs = async () => {
       console.log(`[cron] Cleaned ${result.affectedRows} old audit log entries`);
     }
   } catch (err) {
+    // No audit row written yet on this database → no table yet (utils/audit.js creates it)
+    if (err.code === 'ER_NO_SUCH_TABLE') return;
     console.error('[cron][audit-cleanup]', err.message);
   }
 };

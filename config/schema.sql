@@ -532,3 +532,22 @@ CREATE INDEX idx_emi_due_date           ON emi_schedule(due_date);
 CREATE INDEX idx_investments_user_id    ON investments(user_id);
 CREATE INDEX idx_investments_status     ON investments(status);
 CREATE INDEX idx_investments_maturity   ON investments(maturity_date);
+
+-- AUDIT LOG (who did what in the admin panel). utils/audit.js also creates it
+-- on first use, with this same definition; times are written in India time.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  admin_id    INT NULL,
+  admin_name  VARCHAR(150) NULL,
+  admin_role  VARCHAR(30) NULL,
+  action      VARCHAR(80) NOT NULL,
+  entity_type VARCHAR(40) NULL,
+  entity_id   VARCHAR(64) NULL,
+  details     MEDIUMTEXT NULL,
+  ip_address  VARCHAR(64) NULL,
+  created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_audit_created (created_at),
+  INDEX idx_audit_entity (entity_type, entity_id),
+  INDEX idx_audit_admin (admin_id, created_at),
+  INDEX idx_audit_action (action)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

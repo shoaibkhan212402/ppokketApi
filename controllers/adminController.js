@@ -18,7 +18,7 @@ const { attachAadhaarWithoutOtp, isWithoutOtp } = require('../utils/aadhaarMode'
 const { attachCoupons, couponOffDisbursal } = require('../utils/coupons');
 const { notArchivedSql, archivedCount } = require('../utils/archive');
 const { getCache, setCache, delCache, invalidateUserCache, CACHE_TTL } = require('../config/redis');
-const { auditLog } = require('../utils/audit');
+const { auditLog, listAuditLog } = require('../utils/audit');
 const { getUserCreditDetails } = require('./userController');
 const { isRefusedPassword } = require('./authController');
 const { ASSIGNABLE_ROLES, ROLE_LABELS, ensureRoleStorable, storedRole } = require('../utils/adminRoles');
@@ -2163,28 +2163,14 @@ const assignUserPartner = async (req, res) => {
 };
 
 // GET /api/admin/audit-log
+//   ?page=&limit=&action=&entity_type=&entity_id=&admin_id=&from=YYYY-MM-DD&to=YYYY-MM-DD
 const getAuditLog = async (req, res) => {
   try {
-    const { page = 1, limit = 50, action, entity_type, admin_id } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-
-    let where = [];
-    let params = [];
-    if (action) { where.push('action LIKE ?'); params.push(`%${action}%`); }
-    if (entity_type) { where.push('entity_type = ?'); params.push(entity_type); }
-    if (admin_id) { where.push('admin_id = ?'); params.push(admin_id); }
-
-    const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-
-    const [[{ total }]] = await pool.query(
-      `SELECT COUNT(*) AS total FROM audit_log ${whereClause}`, params
-    );
-    const [logs] = await pool.query(
-      `SELECT * FROM audit_log ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      [...params, parseInt(limit), offset]
-    );
-
-    res.json({ success: true, logs, total, page: parseInt(page), pages: Math.ceil(total / limit) });
+    const { page, limit, action, entity_type, entity_id, admin_id, from, to } = req.query;
+    const result = await listAuditLog({
+      page, limit, action, entityType: entity_type, entityId: entity_id, adminId: admin_id, from, to,
+    });
+    res.json({ success: true, ...result });
   } catch (err) {
     console.error('[getAuditLog]', err);
     res.status(500).json({ success: false, message: err.message });
