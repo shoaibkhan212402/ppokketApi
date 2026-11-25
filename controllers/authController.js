@@ -41,10 +41,53 @@ const DEV_TEST_MOBILE = process.env.DEV_TEST_MOBILE || '9999999999';
 const DEV_TEST_OTP    = process.env.DEV_TEST_OTP || '123456';
 const isDevTestNumber = (mobile) => mobile === DEV_TEST_MOBILE || (DEV_TEST_MOBILE && mobile === DEV_TEST_MOBILE);
 
-// Send OTP via Orbitel Bulk SMS API. `template` (optional) sends another
-// DLT-approved message instead of the login one: { templateId, text } with the
-// code already in the text.
+// The login OTP text — the DLT-approved template 1777178462733887075 with the code in it
+const loginSmsText = (otp) => `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
+
+// Areach SMS (api.areach.in), the SMS provider since 2026-11-25. Used whenever
+// AREACH_API_KEY is set; otherwise the older Orbitel path below. Settings:
+//   AREACH_API_KEY, AREACH_SENDER (PPOKET), AREACH_LOGIN_TEMPLATE_ID,
+//   AREACH_REFERENCE_TEMPLATE_ID (with SMS_REFERENCE_TEXT, see utils/referenceOtp.js)
+// The request is the one Areach gave us: GET …/v1/sms?apikey&sender&to&text&type=OTP&templateId.
+// The URL carries the key, so it is never logged.
+const AREACH_SMS_URL = 'https://api.areach.in/v1/sms';
+const sendViaAreach = async (mobile, { templateId, text }) => {
+  const apikey = process.env.AREACH_API_KEY;
+  const sender = process.env.AREACH_SENDER || 'PPOKET';
+  if (!apikey || !templateId || !text) {
+    throw new Error('Areach SMS is not fully configured (AREACH_API_KEY / template id / text)');
+  }
+  const url = new URL(AREACH_SMS_URL);
+  url.searchParams.set('apikey', apikey);
+  url.searchParams.set('sender', sender);
+  url.searchParams.set('to', mobile);
+  url.searchParams.set('text', text);
+  url.searchParams.set('type', 'OTP');
+  url.searchParams.set('templateId', templateId);
+
+  const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) });
+  const body = await resp.text();
+  console.log(`[Areach SMS] to ${mobile.slice(0, 2)}******${mobile.slice(-2)} template ${templateId} → HTTP ${resp.status} ${body.slice(0, 300)}`);
+  if (!resp.ok) throw new Error(`Areach SMS failed (HTTP ${resp.status})`);
+  // A JSON answer that says it failed is a failure too. Success looks like (seen 2026-11-25):
+  // {"status":"OK","id":"…","data":[{"recipient":"91…","messageId":"…"}],"message":"Message Sent Successfully!","error":null}
+  let data = null;
+  try { data = JSON.parse(body); } catch { /* plain text answer */ }
+  if (data && (data.success === false || data.status === false || data.error
+      || /^(error|fail|failed|failure)$/i.test(String(data.status || '')))) {
+    throw new Error(`Areach SMS refused: ${String(data.message || data.msg || data.error || body).slice(0, 160)}`);
+  }
+  return body;
+};
+
+// Send an OTP SMS. `template` (optional) sends another DLT-approved message
+// instead of the login one: { templateId, text } with the code already in the text.
 const sendOtpViaSms = async (mobile, otp, template = null) => {
+  if (process.env.AREACH_API_KEY) {
+    return sendViaAreach(mobile, template || { templateId: process.env.AREACH_LOGIN_TEMPLATE_ID, text: loginSmsText(otp) });
+  }
+
+  // ── Orbitel (the provider before Areach) ──
   const user = process.env.ORBITEL_USER;
   const authkey = process.env.ORBITEL_AUTHKEY;
   const sender = process.env.ORBITEL_SENDER;
@@ -75,7 +118,7 @@ const sendOtpViaSms = async (mobile, otp, template = null) => {
     return data;
   }
 
-  const text = `Your PPokket verification code is ${otp}. Do not share this code with anyone. - PPokket`;
+  const text = loginSmsText(otp);
 
   const url = new URL('https://bulksms.orbitel.in/api/pushsms');
   url.searchParams.set('user', user);
